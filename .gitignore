@@ -1,0 +1,17 @@
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+.next/
+
+# Local development files
+.DS_Store
+*.log
+.idea/
+.vscode/
+
