@@ -1,0 +1,93 @@
+:root {
+  --header: #0D5257;
+  --bg: #f4f7f7;
+  --card: #ffffff;
+  --text: #1f2933;
+  --muted: #52606d;
+  --focus: #f59e0b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.container {
+  width: min(100% - 2rem, 1100px);
+  margin: 0 auto;
+}
+
+.site-header {
+  background: var(--header);
+  color: #ffffff;
+  padding: 2rem 0;
+}
+
+.site-header h1 {
+  margin: 0 0 0.5rem 0;
+  font-size: 2rem;
+}
+
+.subtitle {
+  margin: 0 0 0.75rem 0;
+  font-size: 1.05rem;
+}
+
+.prototype-label {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  opacity: 0.95;
+}
+
+.pathways {
+  padding: 2rem 0;
+}
+
+.pathways h2 {
+  margin: 0 0 1rem 0;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid #d9e2e2;
+  border-radius: 10px;
+  padding: 1.25rem;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+
+.card h3 {
+  margin: 0 0 0.5rem 0;
+  color: var(--header);
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.integration-note {
+  margin: 1.25rem 0 0 0;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.card:focus, button:focus, a:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .site-header h1 { font-size: 1.6rem; }
+}
