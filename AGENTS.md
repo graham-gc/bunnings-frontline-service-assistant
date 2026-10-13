@@ -19,7 +19,7 @@ A frontline team member receives a customer enquiry, classifies it (Standard ret
 ```
 server/
   index.js          Express app, static files, route mounting
-  sap.js            SAP sandbox client, date conversion, error mapping, mock fallback
+  sap.js            SAP sandbox client (live SAP sandbox calls only), date conversion, error mapping
   rules.js          Business rules R1–R6 and recommendation
   store.js          Read/write data/cases.json
   routes/
@@ -32,7 +32,6 @@ server/
     cases.js        /api/cases/... and /api/kpi
 public/
   index.html  new.html  result.html  case.html  styles.css  app.js
-mock/                SAP JSON responses saved from Try Out (fallback data)
 data/cases.json      Case records
 docs/prompt-log.md   Every OpenCode prompt and what it produced
 ```
@@ -48,7 +47,9 @@ docs/prompt-log.md   Every OpenCode prompt and what it produced
 - Convert SAP dates `/Date(1546214400000)/` to ISO `2018-12-31` in `sap.js`.
 - Parse quantities and amounts with `parseFloat` (SAP returns strings such as `"63275"` or `"0.000"`).
 - A 404 or SAP error code `/IWBEP/CM_MGW_RT/020` means NOT_FOUND.
-- If `USE_MOCK=true`, or the sandbox call fails with a network or 5xx error, return the matching file from `/mock` and set `"source": "mock"`. Live responses set `"source": "live"`.
+- The SAP API key is stored server-side only in `.env` (`SAP_API_KEY`); it is never sent to the browser.
+- Network errors and SAP 5xx responses must return the contract's `SAP_UNAVAILABLE` error (`"SAP is not responding. Please try again or use the manual process."`). There is no mock fallback.
+- Every successful SAP-backed response sets `"source": "live"`.
 
 ## Coding rules
 

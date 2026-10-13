@@ -14,14 +14,14 @@ This file is the agreement between the back end (Member B) and the front end (Me
 4. Create `.env` locally (never commit it):
 
 ```
+SAP_API_ROOT=https://sandbox.api.sap.com/s4hanacloud/sap/opu/odata/sap
 SAP_API_KEY=your-own-key
-USE_MOCK=false
 PORT=3000
 DEFAULT_PLANT=1710
 ```
 
 5. Commit `.env.example` with the same keys and empty values.
-6. Open the folder in OpenCode. Use **Plan** mode first, read the plan, then switch to **Build** mode (Tab key).
+6. Open the folder in OpenCode. In OpenCode Desktop the user can submit implementation prompts directly because Build is the default agent; no visible Build label is required.
 7. After each prompt: test in the browser, then `git commit`. Paste the prompt and a one-line result into `docs/prompt-log.md`.
 
 ---
@@ -33,7 +33,7 @@ DEFAULT_PLANT=1710
 | Base URL | `http://localhost:3000` |
 | Dates | ISO strings `YYYY-MM-DD` |
 | Numbers | JSON numbers (convert SAP strings with `parseFloat`) |
-| Data source | Every SAP-backed response has `"source": "live"` or `"source": "mock"` and `"checkedAt": "<ISO datetime>"` |
+| Data source | Every successful SAP-backed response has `"source": "live"` and `"checkedAt": "<ISO datetime>"` |
 | Default plant | `1710` (sandbox store) |
 
 ### Error format (all endpoints)
@@ -46,7 +46,7 @@ DEFAULT_PLANT=1710
 |---|---|---|---|
 | `NOT_FOUND` | 404 | SAP 404 or `/IWBEP/CM_MGW_RT/020` | Customer: "Customer ID not found. Please check the number or search by name." · Quotation: "Quotation not found. Please check the quote number." · Product: "Product not found. Try a different name." |
 | `BAD_REQUEST` | 400 | Missing or invalid input | "Please enter ___ before checking SAP." |
-| `SAP_UNAVAILABLE` | 503 | Network error / SAP 5xx and no mock file | "SAP is not responding. Please try again or use the manual process." |
+| `SAP_UNAVAILABLE` | 503 | Network error or SAP 5xx response | "SAP is not responding. Please try again or use the manual process." |
 
 ### How to detect NOT_FOUND (tested in the sandbox)
 
@@ -400,25 +400,7 @@ Usability rules: clear labels, required fields marked *, plain-English errors, l
 
 ---
 
-## 7. Mock files (Member B)
-
-Save each Try Out response (without the API key) into `/mock`, named:
-
-```
-customer_USCU-CUS01.json      customersearch_Sports.json
-quotation_20000003.json       quotation_20000004.json      quotations_USCU-CUS01.json
-stock_MZ-TG-A10_1710.json     stock_MZ-FG-E12_1710.json    stock_D2O_XY00174197_1710.json
-stock_FG226_1710.json         stock_D2O_XY00174197_all.json stock_FG226_all.json
-stock_CM-FL-V00_all.json
-productsearch_Headlight.json  productsearch_Valve_Assembly.json
-orders_20000003.json          orders_20000004.json
-```
-
-`_all` files are the cross-store queries (no plant filter).
-
----
-
-## 8. Acceptance tests (Member D runs these; all must pass by Saturday night)
+## 7. Acceptance tests (Member D runs these; all must pass by Saturday night)
 
 | # | Pathway | Input | Expected |
 |---|---|---|---|
@@ -429,7 +411,6 @@ orders_20000003.json          orders_20000004.json
 | D | Trade / order status | USCU-CUS01 → quote 20000004 | R2: order 14 fully delivered; no R3 → RESOLVE_NOW → FCR |
 | E | Error | Customer ID XXXXXXXX | "Customer ID not found…" message, no crash (works for both 404 body formats) |
 | F | Error | Quote 99999999 | "Quotation not found…" message (single GET 404; also via empty-array fallback) |
-| G | Mock | Set `USE_MOCK=true`, repeat A–D | Same results, page shows "Mock data" |
 | H | KPI | After A, B, C1, C2, D | Dashboard: 5 enquiries, FCR rate 40% (A, D), 3 open follow-ups (B, C1, C2) |
 | I | Specialist | On case B, "Request specialist" → add advice | Status AWAITING_SPECIALIST, handoverCount 1, summary lists flags |
 | J | Stock total | FG226 at plant 1710 | Sellable 100: row in 171B counted; five special-stock E rows (20 PC reserved) in 171A excluded |
@@ -439,7 +420,7 @@ orders_20000003.json          orders_20000004.json
 
 ## 9. OpenCode prompts
 
-Paste one prompt at a time. Plan mode → read → Build mode → test → commit → log.
+Paste one prompt at a time. Submit directly in OpenCode Desktop (Build is the default agent) → test → commit → log.
 
 ### Member B — back end
 
@@ -450,7 +431,7 @@ Read AGENTS.md and API_Contract_and_OpenCode_Prompts.md. Create the Node.js + Ex
 
 **B2 · SAP client**
 ```
-Create server/sap.js as described in AGENTS.md "SAP sandbox rules". Export: sapGet(service, path, params) that builds the URL with URLSearchParams, sends APIKey and Accept headers, and returns parsed JSON (unwrap d.results or d); toIsoDate("/Date(…)/"); escapeOData(str); and error mapping to { code, message, sapCode } with NOT_FOUND for 404 or /IWBEP/CM_MGW_RT/020, SAP_UNAVAILABLE for network/5xx. Add mock fallback: sapGet(…, { mockFile }) returns /mock/<mockFile> when USE_MOCK=true or the call fails with SAP_UNAVAILABLE, and marks source "mock". Add a small test script scripts/test-sap.js that calls A_Customer('USCU-CUS01') and prints the name.
+Create server/sap.js as described in AGENTS.md "SAP sandbox rules", using the live SAP sandbox only. Export: sapGet(service, path, params) that builds the URL from process.env.SAP_API_ROOT with URLSearchParams, sends APIKey (process.env.SAP_API_KEY) and Accept headers, and returns parsed JSON (unwrap d.results or d); toIsoDate("/Date(…)/"); escapeOData(str); and error mapping to { code, message, sapCode } with NOT_FOUND for 404 or /IWBEP/CM_MGW_RT/020, SAP_UNAVAILABLE for network/5xx. There is no mock fallback: network errors and SAP 5xx responses return SAP_UNAVAILABLE, and every successful response marks source "live". Add a small test script scripts/test-sap.js that calls A_Customer('USCU-CUS01') against the live SAP sandbox and prints the name.
 ```
 
 **B3 · Customer and product endpoints**
@@ -465,12 +446,12 @@ Implement contract sections 3.4 (including the all-plants response with "plants"
 
 **B5 · Rules and check endpoint**
 ```
-Implement server/rules.js and POST /api/check (contract section 4). When the store plant does not have enough stock, call the all-plants stock query and add otherPlants. rules.js exports evaluate(data) that applies R1, R2, R3, R4, R5a/R5b and R6 in the given order, adds the action field to each flag, and returns { flags, recommendation }. Write unit tests in scripts/test-rules.js for acceptance scenarios A, B, C1, C2 and D using the mock files, and print PASS/FAIL for each.
+Implement server/rules.js and POST /api/check (contract section 4). When the store plant does not have enough stock, call the all-plants stock query and add otherPlants. rules.js exports evaluate(data) that applies R1, R2, R3, R4, R5a/R5b and R6 in the given order, adds the action field to each flag, and returns { flags, recommendation }. Write unit tests in scripts/test-rules.js for acceptance scenarios A, B, C1, C2 and D against the live SAP sandbox, and print PASS/FAIL for each.
 ```
 
-**B6 · Mock files and README**
+**B6 · README**
 ```
-Check that every mock file listed in contract section 7 exists and that USE_MOCK=true makes scenarios A to D return the same recommendation as live. Then write README.md: what the app does, how to install (npm install), create .env from .env.example, run (npm start), which SAP APIs are used, and the limitations (sandbox sample data, read-only, notifications recorded not sent).
+Check that scenarios A to D return the expected recommendations against the live SAP sandbox (no mock files are used). Then write README.md: what the app does, how to install (npm install), create .env from .env.example, run (npm start), which SAP APIs are used, and the limitations (sandbox sample data, read-only, notifications recorded not sent).
 ```
 
 ### Member C — front end and cases
@@ -492,7 +473,7 @@ Create public/new.html and the related code in public/app.js (contract section 6
 
 **C4 · SAP check result page**
 ```
-Create public/result.html (contract section 6). Load the case and render its sapSnapshot: customer card (account status in words), quotation card (validity date, the word "Expired" in red if expired, process status text), item table (required qty, stock at this store, stock at other stores from otherPlants, "Rejected" label on rejected rows), order card (delivery status in words), flags list grouped by severity with the suggested action (Transfer / Special order / Re-quote / Check rejection), data source (Live SAP / Mock data) and checked time. Show buttons based on recommendation: "Resolve now" (POST resolve), "Request specialist" (POST request-specialist), "Create follow-up" (form with owner, due date, "Customer notified" tick box → POST follow-up). After each action go to case.html?id=.
+Create public/result.html (contract section 6). Load the case and render its sapSnapshot: customer card (account status in words), quotation card (validity date, the word "Expired" in red if expired, process status text), item table (required qty, stock at this store, stock at other stores from otherPlants, "Rejected" label on rejected rows), order card (delivery status in words), flags list grouped by severity with the suggested action (Transfer / Special order / Re-quote / Check rejection), data source (Live SAP) and checked time. Show buttons based on recommendation: "Resolve now" (POST resolve), "Request specialist" (POST request-specialist), "Create follow-up" (form with owner, due date, "Customer notified" tick box → POST follow-up). After each action go to case.html?id=.
 ```
 
 **C5 · Case detail page and polish**
