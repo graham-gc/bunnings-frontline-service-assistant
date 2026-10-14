@@ -3,10 +3,24 @@ const SAP_API_KEY = process.env.SAP_API_KEY;
 
 // Turn SAP date strings such as /Date(1546214400000)/ into ISO dates.
 function toIsoDate(sapDate) {
-  if (!sapDate) return null;
-  const match = String(sapDate).match(/\/Date\((\d+)\)\//);
-  if (!match) return String(sapDate).slice(0, 10);
-  return new Date(Number(match[1])).toISOString().slice(0, 10);
+  if (sapDate === null || sapDate === undefined) return null;
+  const text = String(sapDate).trim();
+  if (!text) return null;
+
+  // SAP OData v2 dates look like /Date(1546214400000)/.
+  const match = text.match(/\/Date\((-?\d+)\)\//);
+  if (match) {
+    const date = new Date(Number(match[1]));
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toISOString().slice(0, 10);
+  }
+
+  // Allow dates that are already ISO-like strings, such as 2018-12-31.
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    return text.slice(0, 10);
+  }
+
+  return null;
 }
 
 // OData string literals use doubled single quotes.
