@@ -12,6 +12,7 @@ app.use('/api/products', require('./routes/products'));
 app.use('/api/stock', require('./routes/stock'));
 app.use('/api/quotations', require('./routes/quotations'));
 app.use('/api/orders', require('./routes/orders'));
+app.use('/api/check', require('./routes/check'));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.get('/api/health', (req, res) => {

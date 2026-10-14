@@ -402,17 +402,16 @@ Usability rules: clear labels, required fields marked *, plain-English errors, l
 
 ## 7. Acceptance tests (Member D runs these; all must pass by Saturday night)
 
+**Note:** Scenario D (USCU-CUS01 → quotation 20000004) and H were corrected after verifying the current live SAP Sandbox. Quotation `20000004` has rejected item 30 (reason `70`), so R4 applies and D ends in `CREATE_FOLLOW_UP` / `NON_FCR`; R2 still produces INFO, and R3 does not apply. Rules R1–R6 were not changed.
 | # | Pathway | Input | Expected |
 |---|---|---|---|
 | A | Standard retail | Search "Headlight" → MZ-TG-A10, qty 10 | Stock 63,275 → recommendation RESOLVE_NOW → resolve → outcome FCR |
 | B | Trade | Search "World" → USCU-CUS01 → quote 20000003 | Flags R3 (expired) + R4 (item 20 rejected); stock sufficient; R6 passes (0004 = 0004) → CREATE_FOLLOW_UP → owner + due date → NON_FCR |
 | C1 | Special order | Search "Valve Assembly" → D2O_XY00174197, qty 2 | Stock 0 at 1710 and no other plant (confirmed: only one row, 1710, type 01, qty 0, unit EA) → R5b (SPECIAL_ORDER) → CREATE_FOLLOW_UP |
 | C2 | Standard retail → transfer | FG226, qty 200 | 100 sellable at 1710, plant 1010 has 1,000 (both confirmed type 01, no special stock) → R5a (TRANSFER) → CREATE_FOLLOW_UP. Product name is technical ("FIN226,MTO,PD,Batch-Fifo"), so use C2 as a functional test; showing it in the live demo is optional |
-| D | Trade / order status | USCU-CUS01 → quote 20000004 | R2: order 14 fully delivered; no R3 → RESOLVE_NOW → FCR |
-| E | Error | Customer ID XXXXXXXX | "Customer ID not found…" message, no crash (works for both 404 body formats) |
+| D | Trade / order status | USCU-CUS01 → quote 20000004 | R2: order 14 fully delivered (INFO); item 30 rejected (reason 70) triggers R4 with action `CHECK_REJECTION`; no R3; R5a/R5b/R6 not triggered → CREATE_FOLLOW_UP → NON_FCR || E | Error | Customer ID XXXXXXXX | "Customer ID not found…" message, no crash (works for both 404 body formats) |
 | F | Error | Quote 99999999 | "Quotation not found…" message (single GET 404; also via empty-array fallback) |
-| H | KPI | After A, B, C1, C2, D | Dashboard: 5 enquiries, FCR rate 40% (A, D), 3 open follow-ups (B, C1, C2) |
-| I | Specialist | On case B, "Request specialist" → add advice | Status AWAITING_SPECIALIST, handoverCount 1, summary lists flags |
+| H | KPI | After A, B, C1, C2, D | Dashboard: 5 enquiries, FCR cases: 1 (A only), FCR rate: 20%, 4 open follow-ups (B, C1, C2, D) || I | Specialist | On case B, "Request specialist" → add advice | Status AWAITING_SPECIALIST, handoverCount 1, summary lists flags |
 | J | Stock total | FG226 at plant 1710 | Sellable 100: row in 171B counted; five special-stock E rows (20 PC reserved) in 171A excluded |
 | K | Sellable stock only | CM-FL-V00, all plants | Sellable stock 0 everywhere, although rows show 1 (type 07 and special stock E are excluded) |
 
