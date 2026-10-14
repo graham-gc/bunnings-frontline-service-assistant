@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Case Detail</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="case-detail">
+  <header class="site-header">
+    <div class="container header-row">
+      <div>
+        <h1>Case Detail</h1>
+        <p class="subtitle">Review case history, specialist advice, and follow-up status.</p>
+        <p class="prototype-label">University prototype — not an official Bunnings product</p>
+      </div>
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <a class="button button--secondary header-action" href="index.html">← Dashboard</a>
+        <a class="button button--secondary header-action" href="new.html">New Enquiry</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container page-main">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="index.html">Dashboard</a> <span aria-hidden="true">/</span>
+      <a href="new.html">New Enquiry</a> <span aria-hidden="true">/</span> Case Detail
+    </nav>
+
+    <div id="global-error" class="error-banner" role="alert" hidden>
+      <p id="global-error-text"></p>
+      <button type="button" class="button button--secondary" id="global-error-retry" hidden>Retry</button>
+    </div>
+
+    <div id="loading-state" class="loading-state" aria-live="polite" hidden>
+      Loading case…
+    </div>
+
+    <article id="case-content" hidden>
+      <header class="case-header">
+        <div class="case-header-main">
+          <h2 id="case-number">Case <span id="case-id"></span></h2>
+          <div class="case-meta">
+            <span class="chip" id="status-chip"></span>
+            <span class="chip" id="pathway-chip"></span>
+            <span class="chip" id="recommendation-chip"></span>
+            <span class="chip" id="outcome-chip"></span>
+          </div>
+        </div>
+        <div class="case-source" id="case-source"></div>
+      </header>
+
+      <section id="summary-section" class="result-card">
+        <h3>Case Summary</h3>
+        <dl class="detail-grid" id="summary-grid">
+          <dt>Created</dt>
+          <dd id="summary-created"></dd>
+          <dt>Retrieval reason</dt>
+          <dd id="summary-reason"></dd>
+          <dt>Customer</dt>
+          <dd id="summary-customer"></dd>
+          <dt>Quotation</dt>
+          <dd id="summary-quotation"></dd>
+          <dt>Product</dt>
+          <dd id="summary-product"></dd>
+          <dt>Requested quantity</dt>
+          <dd id="summary-qty"></dd>
+          <dt>SAP checked</dt>
+          <dd id="summary-sap-checked"></dd>
+          <dt>Outcome</dt>
+          <dd id="summary-outcome"></dd>
+          <dt>Outcome time</dt>
+          <dd id="summary-outcome-time"></dd>
+          <dt>Contact duration</dt>
+          <dd id="summary-duration"></dd>
+          <dt>Handovers</dt>
+          <dd id="summary-handovers"></dd>
+        </dl>
+      </section>
+
+      <section id="flags-section" class="result-card">
+        <h3>Follow-up Issues</h3>
+        <div id="flags-specialist" class="flag-group" hidden>
+          <h4>Specialist Required</h4>
+          <ul id="flags-specialist-list" class="flag-list"></ul>
+        </div>
+        <div id="flags-followup" class="flag-group" hidden>
+          <h4>Follow-up Required</h4>
+          <ul id="flags-followup-list" class="flag-list"></ul>
+        </div>
+        <div id="flags-info" class="flag-group" hidden>
+          <h4>Information</h4>
+          <ul id="flags-info-list" class="flag-list"></ul>
+        </div>
+        <p id="no-flags-message" class="field-help" hidden>No follow-up issues identified.</p>
+      </section>
+
+      <section id="sap-snapshot-section" class="result-card">
+        <h3>SAP Snapshot</h3>
+        <div id="sap-customer" class="sap-subsection" hidden>
+          <h4>Customer</h4>
+          <dl class="detail-grid">
+            <dt>Name</dt>
+            <dd id="sap-cust-name"></dd>
+            <dt>Customer ID</dt>
+            <dd id="sap-cust-id"></dd>
+            <dt>Account status</dt>
+            <dd id="sap-cust-status"></dd>
+            <dt>Blocked</dt>
+            <dd id="sap-cust-blocked"></dd>
+            <dt>Deleted</dt>
+            <dd id="sap-cust-deleted"></dd>
+            <dt>Payment terms</dt>
+            <dd id="sap-cust-payment-terms"></dd>
+          </dl>
+        </div>
+        <div id="sap-quotation" class="sap-subsection" hidden>
+          <h4>Quotation</h4>
+          <dl class="detail-grid">
+            <dt>Quotation ID</dt>
+            <dd id="sap-quote-id"></dd>
+            <dt>Date</dt>
+            <dd id="sap-quote-date"></dd>
+            <dt>Valid to</dt>
+            <dd id="sap-quote-valid-to"></dd>
+            <dt>Status</dt>
+            <dd id="sap-quote-status"></dd>
+            <dt>Payment terms</dt>
+            <dd id="sap-quote-payment-terms"></dd>
+            <dt>Total</dt>
+            <dd id="sap-quote-total"></dd>
+          </dl>
+          <p id="sap-quote-expired" class="field-error" hidden></p>
+        </div>
+        <div id="sap-stock" class="sap-subsection" hidden>
+          <h4>Stock Check</h4>
+          <div class="table-wrap">
+            <table class="stock-table">
+              <thead>
+                <tr>
+                  <th>Material</th>
+                  <th>Description</th>
+                  <th>Required</th>
+                  <th>Stock at this store</th>
+                  <th>Unit</th>
+                  <th>Sufficient</th>
+                  <th>Other plants with stock</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="sap-stock-rows"></tbody>
+            </table>
+          </div>
+          <p id="sap-no-stock" class="field-help" hidden></p>
+        </div>
+        <div id="sap-orders" class="sap-subsection" hidden>
+          <h4>Orders from Quotation</h4>
+          <p id="sap-orders-converted" class="field-help"></p>
+          <div id="sap-orders-list"></div>
+        </div>
+      </section>
+
+      <section id="specialist-section" class="result-card">
+        <h3>Specialist Review</h3>
+        <dl class="detail-grid">
+          <dt>Specialist requested</dt>
+          <dd id="spec-requested"></dd>
+          <dt>Requested at</dt>
+          <dd id="spec-requested-at"></dd>
+          <dt>Handover count</dt>
+          <dd id="spec-handover-count"></dd>
+        </dl>
+        <div id="spec-summary" class="sap-subsection" hidden>
+          <h4>Specialist Summary</h4>
+          <p id="spec-summary-text"></p>
+        </div>
+        <div id="spec-advice-section">
+          <h4>Specialist Advice</h4>
+          <p id="spec-advice-text" class="field-help" style="white-space: pre-wrap;"></p>
+          <p id="spec-advice-at" class="field-help" hidden></p>
+          <div id="spec-advice-form" hidden>
+            <label for="spec-advice-input">Add or update advice</label>
+            <textarea id="spec-advice-input" rows="4" style="width: 100%; min-height: 100px; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; font: inherit;" placeholder="Enter specialist advice…"></textarea>
+            <div class="form-actions" style="margin-top: 0.75rem;">
+              <button type="button" class="button button--primary" id="btn-save-advice">Save specialist advice</button>
+              <p id="spec-advice-status" class="field-help" aria-live="polite"></p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="followup-section" class="result-card">
+        <h3>Follow-up</h3>
+        <div id="followup-empty" class="field-help" hidden>No follow-up has been assigned.</div>
+        <dl id="followup-details" class="detail-grid" hidden>
+          <dt>Owner</dt>
+          <dd id="followup-owner"></dd>
+          <dt>Due date</dt>
+          <dd id="followup-due-date"></dd>
+          <dt>Customer notified</dt>
+          <dd id="followup-notified"></dd>
+          <dt>Notified at</dt>
+          <dd id="followup-notified-at"></dd>
+        </dl>
+        <div id="followup-notify-action" hidden>
+          <button type="button" class="button button--secondary" id="btn-mark-notified">Mark customer as notified</button>
+          <p id="followup-notify-status" class="field-help" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section id="history-section" class="result-card">
+        <h3>Case History</h3>
+        <ol id="history-list" class="history-list"></ol>
+        <p id="no-history-message" class="field-help" hidden>No case history recorded.</p>
+      </section>
+
+      <section id="close-section" class="result-card action-section">
+        <h3>Close Case</h3>
+        <div id="close-action" hidden>
+          <p class="field-help">This action cannot be undone. The case will be marked as closed and no further edits will be possible.</p>
+          <button type="button" class="button button--secondary" id="btn-close-case">Close case</button>
+          <p id="close-status" class="field-help" aria-live="polite"></p>
+        </div>
+        <p id="already-closed-message" class="field-help" hidden>This case is closed.</p>
+      </section>
+    </article>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

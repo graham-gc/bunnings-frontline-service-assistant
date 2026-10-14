@@ -620,12 +620,6 @@ function setPathway(pathway) {
   if (stepDetails) {
     stepDetails.textContent = `${labelFromPathway(pathway)} selected. Complete the details below.`;
   }
-  const confirmText = document.getElementById('pathway-confirmation-text');
-  const confirmCard = document.getElementById('pathway-confirmation');
-  if (confirmText && confirmCard) {
-    confirmText.textContent = labelFromPathway(pathway);
-    confirmCard.hidden = false;
-  }
   updateSubmitState();
 }
 
@@ -1369,5 +1363,531 @@ function init() {
 App.registerPage('dashboard', initDashboard);
 App.registerPage('new-enquiry', initNewEnquiry);
 App.registerPage('result', initResultPage);
+
+// ===== Case Detail page =====
+
+const CASE_DETAIL = {
+  caseId: null,
+  caseData: null,
+  isSubmitting: false
+};
+
+function getCaseIdFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('id');
+}
+
+function renderCaseSummary(caseData) {
+  document.getElementById('case-id').textContent = caseData.caseId || '—';
+  document.getElementById('status-chip').textContent = statusLabel(caseData.status);
+  document.getElementById('status-chip').className = `chip ${statusClass(caseData.status)}`;
+  document.getElementById('pathway-chip').textContent = labelFromPathway(caseData.pathway);
+  document.getElementById('pathway-chip').className = `chip chip--${caseData.pathway.toLowerCase().replace('_', '-')}`;
+  document.getElementById('recommendation-chip').textContent = statusLabel(caseData.recommendation);
+  document.getElementById('recommendation-chip').className = `chip ${statusClass(caseData.recommendation)}`;
+  document.getElementById('outcome-chip').textContent = caseData.outcome ? statusLabel(caseData.outcome) : 'No outcome yet';
+  document.getElementById('outcome-chip').className = caseData.outcome ? `chip ${statusClass(caseData.outcome)}` : 'chip chip--unknown';
+
+  const sap = caseData.sapSnapshot;
+  document.getElementById('case-source').textContent = sap && sap.checkedAt ? `Live SAP · Checked ${formatDateTime(sap.checkedAt)}` : '';
+
+  document.getElementById('summary-created').textContent = formatDateTime(caseData.createdAt);
+  document.getElementById('summary-reason').textContent = caseData.retrievalReason || '—';
+  document.getElementById('summary-customer').textContent = caseData.customerName ? `${caseData.customerName} (${caseData.customerId})` : '—';
+  document.getElementById('summary-quotation').textContent = caseData.quotationId || '—';
+  document.getElementById('summary-product').textContent = caseData.productId || '—';
+  document.getElementById('summary-qty').textContent = caseData.requestedQty ? Number(caseData.requestedQty).toLocaleString() : '—';
+  document.getElementById('summary-sap-checked').textContent = sap && sap.checkedAt ? formatDateTime(sap.checkedAt) : '—';
+  document.getElementById('summary-outcome').textContent = caseData.outcome ? statusLabel(caseData.outcome) : 'No outcome recorded';
+  document.getElementById('summary-outcome-time').textContent = caseData.outcomeAt ? formatDateTime(caseData.outcomeAt) : '—';
+  document.getElementById('summary-duration').textContent = caseData.contactDurationSec ? formatDuration(caseData.contactDurationSec) : '—';
+  document.getElementById('summary-handovers').textContent = String(caseData.handoverCount || 0);
+}
+
+function renderCaseFlags(flags) {
+  const specialistList = document.getElementById('flags-specialist-list');
+  const followupList = document.getElementById('flags-followup-list');
+  const infoList = document.getElementById('flags-info-list');
+  const specialistGroup = document.getElementById('flags-specialist');
+  const followupGroup = document.getElementById('flags-followup');
+  const infoGroup = document.getElementById('flags-info');
+  const noFlagsMsg = document.getElementById('no-flags-message');
+
+  specialistList.innerHTML = '';
+  followupList.innerHTML = '';
+  infoList.innerHTML = '';
+
+  if (!Array.isArray(flags) || flags.length === 0) {
+    noFlagsMsg.hidden = false;
+    specialistGroup.hidden = true;
+    followupGroup.hidden = true;
+    infoGroup.hidden = true;
+    return;
+  }
+
+  noFlagsMsg.hidden = true;
+  let hasSpecialist = false, hasFollowup = false, hasInfo = false;
+
+  for (const flag of flags) {
+    const li = document.createElement('li');
+    li.style.marginBottom = '0.75rem';
+    li.style.padding = '0.75rem';
+    li.style.border = '1px solid var(--border)';
+    li.style.borderRadius = '8px';
+    li.style.background = 'var(--card)';
+    const actionText = flag.action ? ` → Suggested: ${actionLabel(flag.action)}` : '';
+    li.innerHTML = `
+      <div style="font-weight: 600; color: var(--header);">${escapeHtml(flag.rule)} (${escapeHtml(flag.severity)})</div>
+      <div style="margin-top: 0.25rem;">${escapeHtml(flag.message)}${escapeHtml(actionText)}</div>
+    `;
+    if (flag.severity === 'SPECIALIST') {
+      specialistList.appendChild(li);
+      hasSpecialist = true;
+    } else if (flag.severity === 'FOLLOW_UP') {
+      followupList.appendChild(li);
+      hasFollowup = true;
+    } else {
+      infoList.appendChild(li);
+      hasInfo = true;
+    }
+  }
+  specialistGroup.hidden = !hasSpecialist;
+  followupGroup.hidden = !hasFollowup;
+  infoGroup.hidden = !hasInfo;
+}
+
+function renderSapSnapshot(sap) {
+  if (!sap) return;
+
+  if (sap.customer) {
+    document.getElementById('sap-customer').hidden = false;
+    document.getElementById('sap-cust-name').textContent = sap.customer.name || '—';
+    document.getElementById('sap-cust-id').textContent = sap.customer.customerId || sap.customer.id || '—';
+    document.getElementById('sap-cust-status').textContent = sap.customer.isBlocked ? 'Blocked' : 'Active';
+    document.getElementById('sap-cust-blocked').textContent = blockStatusLabel(sap.customer.isBlocked);
+    document.getElementById('sap-cust-deleted').textContent = deletedStatusLabel(sap.customer.isDeleted);
+    const paymentTerms = sap.customer.salesAreas?.[0]?.paymentTerms;
+    document.getElementById('sap-cust-payment-terms').textContent = paymentTerms ? paymentTermsLabel(paymentTerms) : '—';
+  }
+
+  if (sap.quotation) {
+    document.getElementById('sap-quotation').hidden = false;
+    document.getElementById('sap-quote-id').textContent = sap.quotation.quotationId || '—';
+    document.getElementById('sap-quote-date').textContent = sap.quotation.date || '—';
+    document.getElementById('sap-quote-valid-to').textContent = sap.quotation.validTo || '—';
+    document.getElementById('sap-quote-status').textContent = processStatusLabel(sap.quotation.processStatus);
+    document.getElementById('sap-quote-payment-terms').textContent = sap.quotation.paymentTerms ? paymentTermsLabel(sap.quotation.paymentTerms) : '—';
+    document.getElementById('sap-quote-total').textContent = money(sap.quotation.totalNet, sap.quotation.currency);
+    const expiredNotice = document.getElementById('sap-quote-expired');
+    if (sap.quotation.isExpired) {
+      expiredNotice.textContent = 'Expired — this quotation is past its validity date.';
+      expiredNotice.hidden = false;
+    } else {
+      expiredNotice.hidden = true;
+    }
+  }
+
+  if (sap.stock) {
+    document.getElementById('sap-stock').hidden = false;
+    const tbody = document.getElementById('sap-stock-rows');
+    const noStockMsg = document.getElementById('sap-no-stock');
+    tbody.innerHTML = '';
+
+    const hasQuotationItems = sap.quotation && Array.isArray(sap.quotation.items) && sap.quotation.items.length > 0;
+    const itemsToRender = hasQuotationItems ? sap.quotation.items : (Array.isArray(sap.stock) ? sap.stock : []);
+
+    if (itemsToRender.length === 0) {
+      noStockMsg.textContent = 'No stock items to display.';
+      noStockMsg.hidden = false;
+      return;
+    }
+    noStockMsg.hidden = true;
+
+    const stockByMaterial = new Map();
+    if (Array.isArray(sap.stock)) {
+      for (const s of sap.stock) {
+        if (s.material) stockByMaterial.set(s.material, s);
+      }
+    }
+
+    for (const item of itemsToRender) {
+      const tr = document.createElement('tr');
+      const material = item.material;
+      const description = item.description || '—';
+      const isRejected = item.isRejected === true;
+      const matchedStock = material ? stockByMaterial.get(material) : null;
+
+      let required, unit, unrestrictedQty, sufficient, otherPlantsText, stockStatusHtml;
+
+      if (isRejected) {
+        required = Number(item.qty || 0);
+        unit = item.unit || '—';
+        unrestrictedQty = 'Not checked';
+        sufficient = false;
+        otherPlantsText = 'Not checked — item rejected';
+        stockStatusHtml = `<span class="chip chip--follow-up">Rejected (reason ${escapeHtml(item.rejectionReason || 'unknown')})</span>`;
+        tr.style.background = '#fef2f2';
+      } else if (matchedStock) {
+        required = Number(matchedStock.required || item.qty || 0);
+        unit = matchedStock.unit || item.unit || '—';
+        unrestrictedQty = Number(matchedStock.unrestrictedQty || 0);
+        sufficient = matchedStock.sufficient === true;
+        otherPlantsText = (Array.isArray(matchedStock.otherPlants) && matchedStock.otherPlants.length > 0)
+          ? matchedStock.otherPlants.map(p => `${p.plant}: ${Number(p.unrestrictedQty).toLocaleString()} ${p.unit || unit}`).join('; ')
+          : 'No other store with sufficient stock';
+        stockStatusHtml = `<span class="${sufficient ? 'chip chip--resolve-now' : 'chip chip--create-follow-up'}">${escapeHtml(sufficientLabel(sufficient))}</span>`;
+      } else {
+        required = Number(item.qty || 0);
+        unit = item.unit || '—';
+        unrestrictedQty = 'No data';
+        sufficient = false;
+        otherPlantsText = 'No stock data available';
+        stockStatusHtml = `<span class="chip chip--create-follow-up">Unknown</span>`;
+      }
+
+      tr.innerHTML = `
+        <td><span class="mono">${escapeHtml(material)}</span></td>
+        <td>${escapeHtml(description)}</td>
+        <td>${Number.isFinite(required) ? required.toLocaleString() : escapeHtml(String(required))}</td>
+        <td>${Number.isFinite(unrestrictedQty) ? unrestrictedQty.toLocaleString() : escapeHtml(String(unrestrictedQty))}</td>
+        <td>${escapeHtml(unit)}</td>
+        <td>${stockStatusHtml}</td>
+        <td>${escapeHtml(otherPlantsText)}</td>
+        <td>${isRejected ? `<span class="chip chip--follow-up">Rejected (reason ${escapeHtml(item.rejectionReason || 'unknown')})</span>` : ''}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  if (sap.orders) {
+    document.getElementById('sap-orders').hidden = false;
+    const convertedStatus = document.getElementById('sap-orders-converted');
+    const list = document.getElementById('sap-orders-list');
+    if (!sap.orders.converted || !Array.isArray(sap.orders.orders) || sap.orders.orders.length === 0) {
+      convertedStatus.textContent = 'This quotation has not been converted to an order.';
+      list.innerHTML = '';
+      return;
+    }
+    convertedStatus.textContent = `Converted — ${sap.orders.orders.length} order(s) found.`;
+    list.innerHTML = '';
+    for (const order of sap.orders.orders) {
+      const div = document.createElement('div');
+      div.className = 'order-item';
+      div.style.marginBottom = '1rem';
+      div.style.padding = '1rem';
+      div.style.border = '1px solid var(--border)';
+      div.style.borderRadius = '10px';
+      div.style.background = 'var(--card)';
+      div.innerHTML = `
+        <div style="display: grid; gap: 0.5rem; margin-bottom: 0.75rem;">
+          <div><strong>Order ID:</strong> <span class="mono">${escapeHtml(order.salesOrderId)}</span></div>
+          <div><strong>Date:</strong> ${escapeHtml(order.orderDate)}</div>
+          <div><strong>Total:</strong> ${escapeHtml(money(order.totalNet, order.currency))}</div>
+          <div><strong>Process status:</strong> ${escapeHtml(processStatusLabel(order.processStatus))}</div>
+          <div><strong>Delivery status:</strong> ${escapeHtml(deliveryStatusLabel(order.deliveryStatus))} ${order.fullyDelivered ? '(Fully delivered)' : '(Not fully delivered)'}</div>
+        </div>
+        <div class="table-wrap" style="max-height: 200px; overflow-y: auto;">
+          <table class="stock-table" style="min-width: 600px;">
+            <thead><tr><th>Item</th><th>Material</th><th>Description</th><th>Qty</th><th>Amount</th><th>Delivery</th></tr></thead>
+            <tbody>
+              ${(order.items || []).map(item => `
+                <tr>
+                  <td>${escapeHtml(item.itemNo)}</td>
+                  <td><span class="mono">${escapeHtml(item.material)}</span></td>
+                  <td>${escapeHtml(item.description || '—')}</td>
+                  <td>${Number(item.qty || 0).toLocaleString()}</td>
+                  <td>${escapeHtml(money(item.netAmount, order.currency))}</td>
+                  <td>${escapeHtml(deliveryStatusLabel(item.deliveryStatus))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+      list.appendChild(div);
+    }
+  }
+}
+
+function renderSpecialistSection(specialist, caseStatus) {
+  if (!specialist) return;
+  document.getElementById('spec-requested').textContent = specialist.requested ? 'Yes' : 'No';
+  document.getElementById('spec-requested-at').textContent = specialist.requestedAt ? formatDateTime(specialist.requestedAt) : '—';
+  // Use the actual top-level handover count from caseData
+  const handoverCount = CASE_DETAIL.caseData ? (CASE_DETAIL.caseData.handoverCount || 0) : 0;
+  document.getElementById('spec-handover-count').textContent = String(handoverCount);
+
+  if (specialist.summary) {
+    document.getElementById('spec-summary').hidden = false;
+    document.getElementById('spec-summary-text').textContent = specialist.summary;
+  }
+
+  const adviceText = document.getElementById('spec-advice-text');
+  const adviceAt = document.getElementById('spec-advice-at');
+  const adviceForm = document.getElementById('spec-advice-form');
+
+  if (specialist.advice) {
+    adviceText.textContent = specialist.advice;
+    adviceText.hidden = false;
+  } else {
+    adviceText.textContent = 'No advice recorded yet.';
+    adviceText.hidden = false;
+  }
+
+  if (specialist.adviceAt) {
+    adviceAt.textContent = `Last updated: ${formatDateTime(specialist.adviceAt)}`;
+    adviceAt.hidden = false;
+  } else {
+    adviceAt.hidden = true;
+  }
+
+  // Explicitly set advice form visibility based on case status
+  adviceForm.hidden = (caseStatus === 'CLOSED');
+}
+
+function renderFollowupSection(followUp, caseStatus) {
+  const empty = document.getElementById('followup-empty');
+  const details = document.getElementById('followup-details');
+  const notifyAction = document.getElementById('followup-notify-action');
+
+  if (!followUp || !followUp.owner) {
+    empty.hidden = false;
+    details.hidden = true;
+    notifyAction.hidden = true;
+    return;
+  }
+
+  empty.hidden = true;
+  details.hidden = false;
+  document.getElementById('followup-owner').textContent = followUp.owner;
+  document.getElementById('followup-due-date').textContent = followUp.dueDate || '—';
+  document.getElementById('followup-notified').textContent = followUp.customerNotified ? 'Yes' : 'No';
+  document.getElementById('followup-notified-at').textContent = followUp.notifiedAt ? formatDateTime(followUp.notifiedAt) : '—';
+
+  // Show notification action if not yet notified and case not closed
+  notifyAction.hidden = followUp.customerNotified || (caseStatus === 'CLOSED');
+}
+
+function renderHistory(history) {
+  const list = document.getElementById('history-list');
+  const noHistory = document.getElementById('no-history-message');
+  list.innerHTML = '';
+
+  if (!Array.isArray(history) || history.length === 0) {
+    noHistory.hidden = false;
+    return;
+  }
+
+  noHistory.hidden = true;
+  for (const entry of history) {
+    const li = document.createElement('li');
+    li.style.marginBottom = '0.75rem';
+    li.style.padding = '0.75rem';
+    li.style.border = '1px solid var(--border)';
+    li.style.borderRadius = '8px';
+    li.style.background = 'var(--card)';
+    li.innerHTML = `
+      <div style="font-weight: 600; color: var(--header);">${escapeHtml(formatDateTime(entry.at))}</div>
+      <div style="margin-top: 0.25rem;">${escapeHtml(entry.action)}</div>
+    `;
+    list.appendChild(li);
+  }
+}
+
+function renderCloseSection(caseData) {
+  const closeAction = document.getElementById('close-action');
+  const alreadyClosed = document.getElementById('already-closed-message');
+
+  if (caseData.status === 'CLOSED') {
+    closeAction.hidden = true;
+    alreadyClosed.hidden = false;
+  } else {
+    closeAction.hidden = false;
+    alreadyClosed.hidden = true;
+  }
+}
+
+function showCaseError(message) {
+  const errorBanner = document.getElementById('global-error');
+  const errorText = document.getElementById('global-error-text');
+  const retryBtn = document.getElementById('global-error-retry');
+  const loading = document.getElementById('loading-state');
+  const content = document.getElementById('case-content');
+
+  loading.hidden = true;
+  content.hidden = true;
+  errorBanner.hidden = false;
+  errorText.textContent = message;
+  retryBtn.hidden = false;
+}
+
+function showCaseLoading() {
+  document.getElementById('loading-state').hidden = false;
+  document.getElementById('global-error').hidden = true;
+  document.getElementById('case-content').hidden = true;
+}
+
+function showCaseContent() {
+  document.getElementById('loading-state').hidden = true;
+  document.getElementById('global-error').hidden = true;
+  document.getElementById('case-content').hidden = false;
+}
+
+async function loadCaseDetail(caseId) {
+  showCaseLoading();
+  try {
+    const data = await requestJson(`/api/cases/${encodeURIComponent(caseId)}`);
+    CASE_DETAIL.caseData = data;
+    renderCaseDetail(data);
+    showCaseContent();
+  } catch (error) {
+    showCaseError(error.message || 'Failed to load case. Please try again.');
+  }
+}
+
+function renderCaseDetail(caseData) {
+  renderCaseSummary(caseData);
+  const flags = caseData.flags && caseData.flags.length > 0 ? caseData.flags : (caseData.sapSnapshot && caseData.sapSnapshot.flags ? caseData.sapSnapshot.flags : []);
+  renderCaseFlags(flags);
+  if (caseData.sapSnapshot) renderSapSnapshot(caseData.sapSnapshot);
+  renderSpecialistSection(caseData.specialist, caseData.status);
+  renderFollowupSection(caseData.followUp, caseData.status);
+  renderHistory(caseData.history);
+  renderCloseSection(caseData);
+}
+
+async function handleSaveAdvice(caseId) {
+  const textarea = document.getElementById('spec-advice-input');
+  const btn = document.getElementById('btn-save-advice');
+  const status = document.getElementById('spec-advice-status');
+  if (!textarea || !btn || CASE_DETAIL.isSubmitting) return;
+
+  const advice = textarea.value.trim();
+  if (!advice) {
+    status.textContent = 'Advice cannot be blank.';
+    status.style.color = 'var(--danger-text)';
+    return;
+  }
+
+  CASE_DETAIL.isSubmitting = true;
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  status.style.color = 'var(--muted)';
+
+  try {
+    const updated = await requestJson(`/api/cases/${encodeURIComponent(caseId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ specialist: { advice } })
+    });
+    CASE_DETAIL.caseData = updated;
+    status.textContent = 'Advice saved.';
+    status.style.color = 'var(--success-text)';
+    // Refresh specialist section and history
+    renderSpecialistSection(updated.specialist, updated.status);
+    renderHistory(updated.history);
+  } catch (error) {
+    status.textContent = error.message || 'Failed to save advice. Please try again.';
+    status.style.color = 'var(--danger-text)';
+  } finally {
+    CASE_DETAIL.isSubmitting = false;
+    btn.disabled = false;
+  }
+}
+
+async function handleMarkNotified(caseId) {
+  const btn = document.getElementById('btn-mark-notified');
+  const status = document.getElementById('followup-notify-status');
+  if (!btn || CASE_DETAIL.isSubmitting) return;
+
+  CASE_DETAIL.isSubmitting = true;
+  btn.disabled = true;
+  status.textContent = 'Recording notification…';
+  status.style.color = 'var(--muted)';
+
+  try {
+    const updated = await requestJson(`/api/cases/${encodeURIComponent(caseId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ followUp: { customerNotified: true } })
+    });
+    CASE_DETAIL.caseData = updated;
+    status.textContent = 'Customer marked as notified.';
+    status.style.color = 'var(--success-text)';
+    // Refresh follow-up section and history
+    renderFollowupSection(updated.followUp, updated.status);
+    renderHistory(updated.history);
+  } catch (error) {
+    status.textContent = error.message || 'Failed to record notification. Please try again.';
+    status.style.color = 'var(--danger-text)';
+  } finally {
+    CASE_DETAIL.isSubmitting = false;
+    btn.disabled = false;
+  }
+}
+
+async function handleCloseCase(caseId) {
+  const btn = document.getElementById('btn-close-case');
+  const status = document.getElementById('close-status');
+  if (!btn || CASE_DETAIL.isSubmitting) return;
+
+  if (!confirm('Are you sure you want to close this case? This action cannot be undone.')) {
+    return;
+  }
+
+  CASE_DETAIL.isSubmitting = true;
+  btn.disabled = true;
+  status.textContent = 'Closing case…';
+  status.style.color = 'var(--muted)';
+
+  try {
+    const updated = await requestJson(`/api/cases/${encodeURIComponent(caseId)}/close`, { method: 'POST' });
+    CASE_DETAIL.caseData = updated;
+    status.textContent = 'Case closed.';
+    status.style.color = 'var(--success-text)';
+    // Refresh entire page content
+    renderCaseDetail(updated);
+  } catch (error) {
+    status.textContent = error.message || 'Failed to close case. Please try again.';
+    status.style.color = 'var(--danger-text)';
+    btn.disabled = false;
+    CASE_DETAIL.isSubmitting = false;
+  }
+}
+
+function initCaseDetailPage() {
+  const caseId = getCaseIdFromUrl();
+  if (!caseId) {
+    document.getElementById('loading-state').hidden = true;
+    document.getElementById('global-error').hidden = false;
+    document.getElementById('global-error-text').textContent = 'No case ID provided. Please return to Dashboard or New Enquiry.';
+    document.getElementById('global-error-retry').hidden = true;
+    return;
+  }
+  CASE_DETAIL.caseId = caseId;
+  loadCaseDetail(caseId);
+
+  const retryBtn = document.getElementById('global-error-retry');
+  if (retryBtn) {
+    retryBtn.addEventListener('click', () => loadCaseDetail(caseId));
+  }
+
+  const saveAdviceBtn = document.getElementById('btn-save-advice');
+  if (saveAdviceBtn) {
+    saveAdviceBtn.addEventListener('click', () => handleSaveAdvice(caseId));
+  }
+
+  const markNotifiedBtn = document.getElementById('btn-mark-notified');
+  if (markNotifiedBtn) {
+    markNotifiedBtn.addEventListener('click', () => handleMarkNotified(caseId));
+  }
+
+  const closeCaseBtn = document.getElementById('btn-close-case');
+  if (closeCaseBtn) {
+    closeCaseBtn.addEventListener('click', () => handleCloseCase(caseId));
+  }
+}
+
+App.registerPage('case-detail', initCaseDetailPage);
 
 document.addEventListener('DOMContentLoaded', () => App.initPages());
