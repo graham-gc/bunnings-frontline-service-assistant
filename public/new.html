@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>New Enquiry</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="new-enquiry">
+  <header class="site-header">
+    <div class="container header-row">
+      <div>
+        <h1>New Enquiry</h1>
+        <p class="subtitle">Check live SAP data and create a tracked case.</p>
+        <p class="prototype-label">University prototype — not an official Bunnings product</p>
+      </div>
+      <a class="button button--secondary header-action" href="index.html">← Dashboard</a>
+    </div>
+  </header>
+
+  <main class="container page-main">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="index.html">Dashboard</a> <span aria-hidden="true">/</span> New Enquiry
+    </nav>
+
+    <ol class="step-list" aria-label="Enquiry steps">
+      <li class="step is-current"><span>1</span> Choose pathway</li>
+      <li class="step"><span>2</span> Enter enquiry details</li>
+      <li class="step"><span>3</span> Check SAP</li>
+    </ol>
+
+    <div id="global-error" class="error-banner" role="alert" hidden>
+      <p id="global-error-text"></p>
+      <button type="button" class="button button--secondary" id="global-error-retry" hidden>Retry</button>
+    </div>
+
+    <form id="enquiry-form" novalidate>
+      <div class="workflow-layout">
+        <aside class="workflow-rail" aria-label="Pathway selection">
+          <fieldset class="form-section pathway-picker">
+            <legend>Step 1: Choose pathway</legend>
+            <div class="pathway-card-grid" role="group" aria-label="Enquiry pathway">
+              <button type="button" class="pathway-card" data-pathway="STANDARD_RETAIL" aria-pressed="false">
+                <span class="pathway-card-title">Standard Retail</span>
+                <span class="pathway-card-text">Stock and quantity checks for retail products.</span>
+                <span class="pathway-choice-state" aria-live="polite">Not selected</span>
+              </button>
+              <button type="button" class="pathway-card" data-pathway="TRADE" aria-pressed="false">
+                <span class="pathway-card-title">Trade</span>
+                <span class="pathway-card-text">Customer accounts, quotations, stock and order status.</span>
+                <span class="pathway-choice-state" aria-live="polite">Not selected</span>
+              </button>
+              <button type="button" class="pathway-card" data-pathway="SPECIAL_ORDER" aria-pressed="false">
+                <span class="pathway-card-title">Special Order</span>
+                <span class="pathway-card-text">Stock transfer or special-order assessment for a product or quotation.</span>
+                <span class="pathway-choice-state" aria-live="polite">Not selected</span>
+              </button>
+            </div>
+            <p class="field-help" id="pathway-selected-text">Choose a pathway to show the relevant fields.</p>
+          </fieldset>
+
+          <div id="pathway-confirmation" class="selection-card selection-card--pathway" hidden>
+            <div>
+              <strong>Selected pathway</strong>
+              <p id="pathway-confirmation-text"></p>
+            </div>
+          </div>
+        </aside>
+
+        <section id="details-section" class="workflow-main" hidden aria-labelledby="step2-heading">
+          <h2 id="step2-heading" class="section-title section-title--workspace">Step 2: Enter enquiry details</h2>
+
+          <fieldset class="form-section" id="product-panel" hidden>
+            <legend>Product details</legend>
+            <div id="product-lookup-controls">
+              <div class="field">
+                <label for="product-search-term">Product name <span class="required-mark">*</span></label>
+                <div class="search-row">
+                  <input id="product-search-term" type="search" autocomplete="off" placeholder="e.g. Headlight" />
+                  <button type="button" id="product-search-button" class="button button--secondary">Search</button>
+                </div>
+                <p id="product-search-loading" class="field-help" hidden aria-live="polite">Searching products…</p>
+                <p id="product-search-error" class="field-error" role="alert" hidden></p>
+                <ul id="product-results" class="search-results" role="listbox" aria-label="Product search results"></ul>
+              </div>
+
+              <div class="field field-inline">
+                <div>
+                  <label for="exact-product-id">Exact material ID</label>
+                  <input id="exact-product-id" type="text" autocomplete="off" placeholder="e.g. FG226" />
+                </div>
+                <button type="button" id="use-exact-product" class="button button--secondary">Use exact material ID</button>
+                <p class="field-help">Use this for a known material number without a product-name search.</p>
+              </div>
+            </div>
+
+            <div id="selected-product" class="selection-region" hidden></div>
+
+            <div class="field">
+              <label for="requested-qty">Requested quantity <span class="required-mark">*</span></label>
+              <input id="requested-qty" type="number" min="0.000001" step="any" inputmode="decimal" />
+              <p id="quantity-error" class="field-error" hidden>Enter a quantity greater than zero.</p>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-section" id="trade-panel" hidden>
+            <legend>Customer and quotation</legend>
+            <div id="customer-lookup-controls">
+              <div class="field">
+                <label for="customer-search-term">Customer name <span class="required-mark">*</span></label>
+                <div class="search-row">
+                  <input id="customer-search-term" type="search" autocomplete="off" placeholder="e.g. World" />
+                  <button type="button" id="customer-search-button" class="button button--secondary">Search</button>
+                </div>
+                <p id="customer-search-loading" class="field-help" hidden aria-live="polite">Searching customers…</p>
+                <p id="customer-search-error" class="field-error" role="alert" hidden></p>
+                <ul id="customer-results" class="search-results" role="listbox" aria-label="Customer search results"></ul>
+              </div>
+
+              <div class="field field-inline">
+                <div>
+                  <label for="customer-exact-id">Exact customer ID</label>
+                  <input id="customer-exact-id" type="text" autocomplete="off" placeholder="e.g. USCU-CUS01" />
+                </div>
+                <button type="button" id="customer-exact-button" class="button button--secondary">Look up customer</button>
+                <p id="customer-lookup-status" class="field-error" role="alert" hidden></p>
+              </div>
+            </div>
+
+            <div id="selected-customer" class="selection-region" hidden></div>
+
+            <div id="quotation-selection-area" class="selection-area">
+              <div class="field">
+                <p class="field-label">Quotations <span class="required-mark">*</span></p>
+                <p id="quotation-loading" class="field-help" hidden aria-live="polite">Loading quotations…</p>
+                <p id="quotation-error" class="field-error" role="alert" hidden></p>
+                <ul id="quotation-list" class="search-results quotation-list" role="listbox" aria-label="Quotations"></ul>
+              </div>
+            </div>
+
+            <div id="selected-quotation" class="selection-region" hidden></div>
+          </fieldset>
+
+          <fieldset class="form-section" id="optional-context" hidden>
+            <legend>Optional context</legend>
+            <p class="field-help">Optional for the product-and-quantity Special Order flow.</p>
+            <div class="field">
+              <label for="optional-customer-id">Customer ID</label>
+              <input id="optional-customer-id" type="text" autocomplete="off" placeholder="Optional" />
+            </div>
+            <div class="field">
+              <label for="optional-quotation-id">Quotation ID</label>
+              <input id="optional-quotation-id" type="text" autocomplete="off" placeholder="Optional" />
+            </div>
+          </fieldset>
+
+          <div class="form-section reason-section">
+            <div class="field">
+              <label for="retrieval-reason">Retrieval reason <span class="required-mark">*</span></label>
+              <select id="retrieval-reason">
+                <option value="Product availability">Product availability</option>
+                <option value="Quote status">Quote status</option>
+                <option value="Order status">Order status</option>
+                <option value="Pricing check">Pricing check</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+
+            <p class="field-help">
+              Fields marked * are required. A typed search term is not a selection.
+            </p>
+
+            <div class="form-actions">
+              <button type="submit" id="check-submit" class="button button--primary" disabled>Check in SAP</button>
+              <p id="check-status" class="field-help" aria-live="polite"></p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </form>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

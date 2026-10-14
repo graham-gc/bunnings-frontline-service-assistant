@@ -27,12 +27,24 @@ function numberOrZero(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
-async function requestJson(url) {
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+async function requestJson(url, options) {
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+    ...options
+  });
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (error) {
+    data = null;
   }
-  const data = await response.json();
+  if (!response.ok) {
+    const message = data && data.error && data.error.message
+      ? data.error.message
+      : `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
   return data;
 }
 
@@ -79,9 +91,10 @@ function statusLabel(value) {
     REQUEST_SPECIALIST: 'Request specialist',
     CREATE_FOLLOW_UP: 'Create follow-up',
     FCR: 'First contact resolved',
-    NON_FCR: 'Follow-up recorded'
+    NON_FCR: 'Follow-up recorded',
+    NONE: 'No outcome yet'
   };
-  return labels[value] || String(value || 'Unknown').replace(/_/g, ' ');
+  return labels[value] || String(value || '').replace(/_/g, ' ') || 'Unknown';
 }
 
 function statusClass(value) {
@@ -142,7 +155,7 @@ function renderCases(cases) {
       </td>
       <td><span class="${statusClass(item.recommendation)}">${escapeHtml(statusLabel(item.recommendation))}</span></td>
       <td><span class="${statusClass(item.status)}">${escapeHtml(statusLabel(item.status))}</span></td>
-      <td><span class="${statusClass(item.outcome)}">${escapeHtml(statusLabel(item.outcome || 'NONE'))}</span></td>
+      <td><span class="${statusClass(item.outcome || 'NONE')}">${escapeHtml(statusLabel(item.outcome || 'NONE'))}</span></td>
       <td><a class="view-link" href="case.html?id=${encodeURIComponent(item.caseId)}">View</a></td>
     `;
     rows.appendChild(row);
@@ -155,7 +168,6 @@ function initDashboard() {
   const retryButton = document.getElementById('dashboard-retry');
   if (!loading || !errorBanner || !retryButton) return;
 
-  let retryHandler = null;
   async function load() {
     loading.hidden = false;
     errorBanner.hidden = true;
@@ -174,11 +186,1188 @@ function initDashboard() {
     }
   }
 
-  retryHandler = load;
-  retryButton.addEventListener('click', () => load());
+  retryButton.addEventListener('click', load);
   load();
 }
 
+const NEW_ENQUIRY = {
+  pathway: null,
+  selectedProduct: null,
+  selectedCustomer: null,
+  selectedQuotation: null,
+  lastCheck: null,
+  pendingCaseSave: false,
+  dirty: false,
+  isSubmitting: false
+};
+
+function markDirty() {
+  if (!NEW_ENQUIRY.lastCheck && !NEW_ENQUIRY.pendingCaseSave) return;
+  NEW_ENQUIRY.lastCheck = null;
+  NEW_ENQUIRY.pendingCaseSave = false;
+  const status = document.getElementById('check-status');
+  if (status) status.textContent = '';
+  const button = document.getElementById('check-submit');
+  if (button) button.textContent = 'Check in SAP';
+}
+
+function money(amount, currency) {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return `${amount} ${currency || ''}`.trim();
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency || 'USD'
+    }).format(value);
+  } catch (error) {
+    return `${value.toFixed(2)} ${currency || ''}`.trim();
+  }
+}
+
+function quotationStateLabel(quotation) {
+  return quotation.isExpired ? 'Expired' : 'Current';
+}
+
+function formatQuotationDate(quotation) {
+  if (!quotation.date) return 'Unknown date';
+  return quotation.date;
+}
+
+function quantityIsValid() {
+  const input = document.getElementById('requested-qty');
+  if (!input) return false;
+  const value = input.value.trim();
+  if (value === '') return false;
+  const quantity = Number(value);
+  return Number.isFinite(quantity) && quantity > 0;
+}
+
+function updateSubmitState() {
+  const button = document.getElementById('check-submit');
+  if (!button) return;
+
+  let valid = false;
+  if (NEW_ENQUIRY.pathway === 'STANDARD_RETAIL') {
+    valid = Boolean(NEW_ENQUIRY.selectedProduct) && quantityIsValid();
+  } else if (NEW_ENQUIRY.pathway === 'TRADE') {
+    valid = Boolean(NEW_ENQUIRY.selectedCustomer) && Boolean(NEW_ENQUIRY.selectedQuotation);
+  } else if (NEW_ENQUIRY.pathway === 'SPECIAL_ORDER') {
+    valid = Boolean(NEW_ENQUIRY.selectedProduct) && quantityIsValid();
+  }
+
+  button.disabled = !valid || NEW_ENQUIRY.isSubmitting;
+  button.textContent = NEW_ENQUIRY.isSubmitting
+    ? (NEW_ENQUIRY.pendingCaseSave ? 'Saving case…' : 'Checking SAP…')
+    : (NEW_ENQUIRY.pendingCaseSave ? 'Retry save case' : 'Check in SAP');
+}
+
+function renderSelectedProduct() {
+  const container = document.getElementById('selected-product');
+  const lookupControls = document.getElementById('product-lookup-controls');
+  if (!container) return;
+  const product = NEW_ENQUIRY.selectedProduct;
+  if (!product) {
+    container.hidden = true;
+    container.innerHTML = '';
+    if (lookupControls) lookupControls.hidden = false;
+    return;
+  }
+  container.hidden = false;
+  if (lookupControls) lookupControls.hidden = true;
+  container.innerHTML = `
+    <div class="selection-card">
+      <div>
+        <strong>Selected product</strong>
+        <p>${escapeHtml(product.description)} <span class="mono">(${escapeHtml(product.id)})</span></p>
+      </div>
+      <button type="button" class="text-button" id="remove-product">Change product</button>
+    </div>
+  `;
+  document.getElementById('remove-product').addEventListener('click', () => {
+    NEW_ENQUIRY.selectedProduct = null;
+    markDirty();
+    renderSelectedProduct();
+    const productResults = document.getElementById('product-results');
+    if (productResults) productResults.innerHTML = '';
+    const searchTerm = document.getElementById('product-search-term');
+    if (searchTerm) searchTerm.value = '';
+    updateSubmitState();
+  });
+}
+
+function renderSelectedCustomer() {
+  const container = document.getElementById('selected-customer');
+  const lookupControls = document.getElementById('customer-lookup-controls');
+  if (!container) return;
+  const customer = NEW_ENQUIRY.selectedCustomer;
+  if (!customer) {
+    container.hidden = true;
+    container.innerHTML = '';
+    if (lookupControls) lookupControls.hidden = false;
+    return;
+  }
+  container.hidden = false;
+  if (lookupControls) lookupControls.hidden = true;
+  container.innerHTML = `
+    <div class="selection-card">
+      <div>
+        <strong>Selected customer</strong>
+        <p>${escapeHtml(customer.name)} <span class="mono">(${escapeHtml(customer.id)})</span></p>
+      </div>
+      <button type="button" class="text-button" id="remove-customer">Change customer</button>
+    </div>
+  `;
+  document.getElementById('remove-customer').addEventListener('click', () => {
+    NEW_ENQUIRY.selectedCustomer = null;
+    NEW_ENQUIRY.selectedQuotation = null;
+    const quoteList = document.getElementById('quotation-list');
+    if (quoteList) quoteList.innerHTML = '';
+    const quoteStatus = document.getElementById('quotation-error');
+    if (quoteStatus) quoteStatus.hidden = true;
+    markDirty();
+    renderSelectedCustomer();
+    renderSelectedQuotation();
+    updateSubmitState();
+  });
+}
+
+function renderSelectedQuotation() {
+  const container = document.getElementById('selected-quotation');
+  const selectionArea = document.getElementById('quotation-selection-area');
+  if (!container) return;
+  const quotation = NEW_ENQUIRY.selectedQuotation;
+  if (!quotation) {
+    container.hidden = true;
+    container.innerHTML = '';
+    if (selectionArea) selectionArea.hidden = false;
+    return;
+  }
+  container.hidden = false;
+  if (selectionArea) selectionArea.hidden = true;
+  container.innerHTML = `
+    <div class="selection-card">
+      <div>
+        <strong>Selected quotation</strong>
+        <p>${escapeHtml(quotation.id)} · ${escapeHtml(formatQuotationDate(quotation))} · ${escapeHtml(quotationStateLabel(quotation))}</p>
+        <p>${escapeHtml(money(quotation.totalNet, quotation.currency))} · ${escapeHtml(quotation.processStatusText || quotation.processStatus)}</p>
+      </div>
+      <button type="button" class="text-button" id="remove-quotation">Change quotation</button>
+    </div>
+  `;
+  document.getElementById('remove-quotation').addEventListener('click', () => {
+    NEW_ENQUIRY.selectedQuotation = null;
+    markDirty();
+    renderSelectedQuotation();
+    updateSubmitState();
+  });
+}
+
+function renderSearchResults(container, items, emptyMessage, onSelect) {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!Array.isArray(items) || items.length === 0) {
+    container.innerHTML = `<li class="search-empty">${escapeHtml(emptyMessage)}</li>`;
+    return;
+  }
+  for (const item of items) {
+    const li = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'search-result';
+    button.innerHTML = `
+      <span class="search-result-title">${escapeHtml(item.label)}</span>
+      <span class="search-result-detail">${escapeHtml(item.detail)}</span>
+    `;
+    button.addEventListener('click', () => {
+      onSelect(item.value);
+      container.innerHTML = '';
+    });
+    li.appendChild(button);
+    container.appendChild(li);
+  }
+}
+
+async function searchProducts(term, resultsElement, loadingElement, errorElement) {
+  const trimmed = term.trim();
+  if (!trimmed) {
+    errorElement.textContent = 'Enter a product name or material ID to search.';
+    errorElement.hidden = false;
+    resultsElement.innerHTML = '';
+    return;
+  }
+  loadingElement.hidden = false;
+  errorElement.hidden = true;
+  resultsElement.innerHTML = '';
+  try {
+    const data = await requestJson(`/api/products/search?name=${encodeURIComponent(trimmed)}`);
+    renderSearchResults(resultsElement, (data.results || []).map((product) => ({
+      label: product.description || product.productId,
+      detail: product.productId,
+      value: product
+    })), 'No matching products found. Try a more specific name or use exact material ID.', (product) => {
+      NEW_ENQUIRY.selectedProduct = { id: product.productId, description: product.description };
+      markDirty();
+      renderSelectedProduct();
+      updateSubmitState();
+    });
+  } catch (error) {
+    errorElement.textContent = error.message || 'Product search failed. Please try again.';
+    errorElement.hidden = false;
+  } finally {
+    loadingElement.hidden = true;
+  }
+}
+
+async function searchCustomers(term, resultsElement, loadingElement, errorElement) {
+  const trimmed = term.trim();
+  if (!trimmed) {
+    errorElement.textContent = 'Enter a customer name or ID to search.';
+    errorElement.hidden = false;
+    resultsElement.innerHTML = '';
+    return;
+  }
+  loadingElement.hidden = false;
+  errorElement.hidden = true;
+  resultsElement.innerHTML = '';
+  try {
+    const data = await requestJson(`/api/customers/search?name=${encodeURIComponent(trimmed)}`);
+    renderSearchResults(resultsElement, (data.results || []).map((customer) => ({
+      label: customer.name,
+      detail: customer.fullName ? `${customer.id || customer.customerId} · ${customer.fullName}` : (customer.id || customer.customerId),
+      value: {
+        id: customer.customerId || customer.id,
+        name: customer.name,
+        fullName: customer.fullName
+      }
+    })), 'No matching customers found. Try a different name or exact customer ID.', (customer) => {
+      setSelectedCustomer(customer);
+    });
+  } catch (error) {
+    errorElement.textContent = error.message || 'Customer search failed. Please try again.';
+    errorElement.hidden = false;
+  } finally {
+    loadingElement.hidden = true;
+  }
+}
+
+async function setSelectedCustomer(customer) {
+  NEW_ENQUIRY.selectedCustomer = customer;
+  NEW_ENQUIRY.selectedQuotation = null;
+  markDirty();
+  renderSelectedCustomer();
+  renderSelectedQuotation();
+  await loadQuotations(customer.id);
+  updateSubmitState();
+}
+
+async function loadQuotations(customerId) {
+  const loading = document.getElementById('quotation-loading');
+  const error = document.getElementById('quotation-error');
+  const list = document.getElementById('quotation-list');
+  if (!loading || !error || !list) return;
+  loading.hidden = false;
+  error.hidden = true;
+  list.innerHTML = '';
+  try {
+    const data = await requestJson(`/api/quotations?customerId=${encodeURIComponent(customerId)}`);
+    const quotations = Array.isArray(data.results) ? data.results : [];
+    if (quotations.length === 0) {
+      list.innerHTML = '<li class="search-empty">No quotations found for this customer.</li>';
+      return;
+    }
+    for (const quotation of quotations) {
+      const card = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'search-result quotation-choice';
+      button.innerHTML = `
+        <span class="search-result-title">${escapeHtml(quotation.quotationId)}</span>
+        <span class="search-result-detail">
+          ${escapeHtml(formatQuotationDate(quotation))} · valid to ${escapeHtml(quotation.validTo || 'unknown')} · ${escapeHtml(quotationStateLabel(quotation))}
+          · ${escapeHtml(money(quotation.totalNet, quotation.currency))} · ${escapeHtml(statusLabel(quotation.processStatus))}
+        </span>
+      `;
+      button.addEventListener('click', () => {
+        NEW_ENQUIRY.selectedQuotation = {
+          id: quotation.quotationId,
+          date: quotation.date,
+          validTo: quotation.validTo,
+          isExpired: quotation.isExpired,
+          totalNet: quotation.totalNet,
+          currency: quotation.currency,
+          processStatus: quotation.processStatus,
+          processStatusText: statusLabel(quotation.processStatus)
+        };
+        markDirty();
+        renderSelectedQuotation();
+        updateSubmitState();
+      });
+      card.appendChild(button);
+      list.appendChild(card);
+    }
+  } catch (error) {
+    error.textContent = error.message || 'Quotations could not be loaded. Please try again.';
+    error.hidden = false;
+  } finally {
+    loading.hidden = true;
+  }
+}
+
+async function lookupCustomer(customerId, statusElement) {
+  const trimmed = customerId.trim();
+  if (!trimmed) {
+    statusElement.textContent = 'Enter a customer ID to look up.';
+    statusElement.hidden = false;
+    return;
+  }
+  statusElement.hidden = true;
+  try {
+    const customer = await requestJson(`/api/customers/${encodeURIComponent(trimmed)}`);
+    await setSelectedCustomer({
+      id: customer.customerId,
+      name: customer.name,
+      fullName: customer.fullName
+    });
+  } catch (error) {
+    statusElement.textContent = error.message || 'Customer was not found.';
+    statusElement.hidden = false;
+  }
+}
+
+function clearPanels() {
+  const panels = ['product-panel', 'trade-panel', 'optional-context'];
+  for (const id of panels) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = true;
+  }
+}
+
+function setPathway(pathway) {
+  NEW_ENQUIRY.pathway = pathway;
+  NEW_ENQUIRY.selectedProduct = null;
+  NEW_ENQUIRY.selectedCustomer = null;
+  NEW_ENQUIRY.selectedQuotation = null;
+  markDirty();
+  renderSelectedProduct();
+  renderSelectedCustomer();
+  renderSelectedQuotation();
+
+  const quoteList = document.getElementById('quotation-list');
+  if (quoteList) quoteList.innerHTML = '';
+  const quoteError = document.getElementById('quotation-error');
+  if (quoteError) quoteError.hidden = true;
+
+  const defaults = {
+    STANDARD_RETAIL: 'Product availability',
+    TRADE: 'Quote status',
+    SPECIAL_ORDER: 'Product availability'
+  };
+  const reason = document.getElementById('retrieval-reason');
+  if (reason && defaults[pathway]) reason.value = defaults[pathway];
+
+  clearPanels();
+  const detailsSection = document.getElementById('details-section');
+  if (detailsSection) detailsSection.hidden = false;
+
+  for (const id of ['product-search-error', 'customer-search-error', 'quotation-error', 'quantity-error', 'customer-lookup-status']) {
+    const element = document.getElementById(id);
+    if (element) {
+      element.hidden = true;
+      if (element.tagName !== 'UL') element.textContent = '';
+    }
+  }
+  const productResults = document.getElementById('product-results');
+  if (productResults) productResults.innerHTML = '';
+  const customerResults = document.getElementById('customer-results');
+  if (customerResults) customerResults.innerHTML = '';
+  const quotationList = document.getElementById('quotation-list');
+  if (quotationList) quotationList.innerHTML = '';
+
+  const term = document.getElementById('product-search-term');
+  if (term) term.value = '';
+  const customerTerm = document.getElementById('customer-search-term');
+  if (customerTerm) customerTerm.value = '';
+  const exactProduct = document.getElementById('exact-product-id');
+  if (exactProduct) exactProduct.value = '';
+  const exactCustomer = document.getElementById('customer-exact-id');
+  if (exactCustomer) exactCustomer.value = '';
+  const optionalCustomer = document.getElementById('optional-customer-id');
+  if (optionalCustomer) optionalCustomer.value = '';
+  const optionalQuotation = document.getElementById('optional-quotation-id');
+  if (optionalQuotation) optionalQuotation.value = '';
+  const quantity = document.getElementById('requested-qty');
+  if (quantity) quantity.value = '';
+
+  const buttons = document.querySelectorAll('.pathway-card');
+  for (const button of buttons) {
+    const isSelected = button.dataset.pathway === pathway;
+    button.setAttribute('aria-pressed', String(isSelected));
+    button.classList.toggle('is-selected', isSelected);
+    const state = button.querySelector('.pathway-choice-state');
+    if (state) state.textContent = isSelected ? 'Selected' : 'Not selected';
+  }
+
+  if (pathway === 'STANDARD_RETAIL') {
+    document.getElementById('product-panel').hidden = false;
+  } else if (pathway === 'TRADE') {
+    document.getElementById('trade-panel').hidden = false;
+  } else if (pathway === 'SPECIAL_ORDER') {
+    document.getElementById('product-panel').hidden = false;
+    document.getElementById('optional-context').hidden = false;
+  }
+
+  const stepDetails = document.getElementById('pathway-selected-text');
+  if (stepDetails) {
+    stepDetails.textContent = `${labelFromPathway(pathway)} selected. Complete the details below.`;
+  }
+  const confirmText = document.getElementById('pathway-confirmation-text');
+  const confirmCard = document.getElementById('pathway-confirmation');
+  if (confirmText && confirmCard) {
+    confirmText.textContent = labelFromPathway(pathway);
+    confirmCard.hidden = false;
+  }
+  updateSubmitState();
+}
+
+function pathwayLabel(pathway) {
+  const labels = {
+    STANDARD_RETAIL: 'Standard Retail',
+    TRADE: 'Trade',
+    SPECIAL_ORDER: 'Special Order'
+  };
+  return labels[pathway] || pathway;
+}
+
+function buildFormPayload() {
+  const pathway = NEW_ENQUIRY.pathway;
+  const customerId = (NEW_ENQUIRY.selectedCustomer && NEW_ENQUIRY.selectedCustomer.id) || null;
+  const quotationId = NEW_ENQUIRY.selectedQuotation ? NEW_ENQUIRY.selectedQuotation.id : (pathway === 'SPECIAL_ORDER' ? (document.getElementById('optional-quotation-id').value.trim() || null) : null);
+  const optionalCustomerId = pathway === 'SPECIAL_ORDER' ? document.getElementById('optional-customer-id').value.trim() : '';
+  const productId = NEW_ENQUIRY.selectedProduct ? NEW_ENQUIRY.selectedProduct.id : null;
+  const quantityInput = document.getElementById('requested-qty');
+  const requestedQty = quantityInput && quantityInput.value.trim() !== '' ? Number(quantityInput.value) : null;
+
+  return {
+    pathway,
+    customerId: pathway === 'TRADE' ? customerId : (optionalCustomerId || null),
+    quotationId,
+    productId,
+    requestedQty: productId ? requestedQty : null,
+    plant: '1710'
+  };
+}
+
+function buildCasePayload(checkResult) {
+  const form = buildFormPayload();
+  return {
+    pathway: form.pathway,
+    customerId: form.customerId,
+    quotationId: form.quotationId,
+    productId: form.productId,
+    requestedQty: form.requestedQty,
+    retrievalReason: document.getElementById('retrieval-reason').value,
+    sapSnapshot: checkResult
+  };
+}
+
+function clearGlobalError() {
+  const globalError = document.getElementById('global-error');
+  if (globalError) {
+    globalError.hidden = true;
+    globalError.textContent = '';
+  }
+}
+
+function showGlobalError(message) {
+  const globalError = document.getElementById('global-error');
+  if (!globalError) return;
+  globalError.textContent = message;
+  globalError.hidden = false;
+}
+
+function initNewEnquiry() {
+  const form = document.getElementById('enquiry-form');
+  if (!form) return;
+
+  const reason = document.getElementById('retrieval-reason');
+  if (reason) {
+    reason.addEventListener('change', markDirty);
+  }
+
+  const pathwayButtons = document.querySelectorAll('.pathway-card');
+  for (const button of pathwayButtons) {
+    button.addEventListener('click', () => {
+      setPathway(button.dataset.pathway);
+      clearGlobalError();
+      markDirty();
+    });
+  }
+
+  const productTerm = document.getElementById('product-search-term');
+  const productSearchButton = document.getElementById('product-search-button');
+  const productLoading = document.getElementById('product-search-loading');
+  const productError = document.getElementById('product-search-error');
+  const productResults = document.getElementById('product-results');
+  const exactProductId = document.getElementById('exact-product-id');
+  const useExactProduct = document.getElementById('use-exact-product');
+
+  if (productSearchButton && productTerm) {
+    const runSearch = (event) => {
+      if (event) event.preventDefault();
+      searchProducts(productTerm.value, productResults, productLoading, productError);
+    };
+    productSearchButton.addEventListener('click', runSearch);
+    productTerm.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') runSearch(event);
+    });
+    productTerm.addEventListener('input', markDirty);
+  }
+
+  if (useExactProduct && exactProductId) {
+    useExactProduct.addEventListener('click', () => {
+      const value = exactProductId.value.trim();
+      if (!value) {
+        productError.textContent = 'Enter a material ID before using the exact entry.';
+        productError.hidden = false;
+        return;
+      }
+      productError.hidden = true;
+      NEW_ENQUIRY.selectedProduct = {
+        id: value,
+        description: `Exact material ID: ${value}`
+      };
+      renderSelectedProduct();
+      markDirty();
+      updateSubmitState();
+    });
+    exactProductId.addEventListener('input', () => {
+      productError.hidden = true;
+      markDirty();
+    });
+  }
+
+  const quantityInput = document.getElementById('requested-qty');
+  if (quantityInput) {
+    quantityInput.addEventListener('input', () => {
+      markDirty();
+      const error = document.getElementById('quantity-error');
+      if (error) error.hidden = quantityInput.value.trim() === '' || quantityIsValid();
+      updateSubmitState();
+    });
+  }
+
+  const customerTerm = document.getElementById('customer-search-term');
+  const customerSearchButton = document.getElementById('customer-search-button');
+  const customerLoading = document.getElementById('customer-search-loading');
+  const customerError = document.getElementById('customer-search-error');
+  const customerResults = document.getElementById('customer-results');
+  const customerLookupInput = document.getElementById('customer-exact-id');
+  const customerLookupButton = document.getElementById('customer-exact-button');
+  const customerLookupStatus = document.getElementById('customer-lookup-status');
+
+  if (customerSearchButton && customerTerm) {
+    const runSearch = (event) => {
+      if (event) event.preventDefault();
+      searchCustomers(customerTerm.value, customerResults, customerLoading, customerError);
+    };
+    customerSearchButton.addEventListener('click', runSearch);
+    customerTerm.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') runSearch(event);
+    });
+    customerTerm.addEventListener('input', markDirty);
+  }
+
+  if (customerLookupButton && customerLookupInput) {
+    customerLookupButton.addEventListener('click', async (event) => {
+      event.preventDefault();
+      clearGlobalError();
+      await lookupCustomer(customerLookupInput.value, customerLookupStatus);
+      markDirty();
+      updateSubmitState();
+    });
+    customerLookupInput.addEventListener('input', () => {
+      customerLookupStatus.hidden = true;
+      markDirty();
+    });
+  }
+
+  const optionalCustomer = document.getElementById('optional-customer-id');
+  const optionalQuotation = document.getElementById('optional-quotation-id');
+  if (optionalCustomer) optionalCustomer.addEventListener('input', markDirty);
+  if (optionalQuotation) optionalQuotation.addEventListener('input', markDirty);
+
+  const actionButton = document.getElementById('check-submit');
+  const statusArea = document.getElementById('check-status');
+  if (actionButton) {
+    actionButton.addEventListener('click', async (event) => {
+      event.preventDefault();
+      clearGlobalError();
+      if (actionButton.disabled) return;
+
+      NEW_ENQUIRY.isSubmitting = true;
+      updateSubmitState();
+      const initialLabel = actionButton.textContent;
+      actionButton.textContent = NEW_ENQUIRY.pendingCaseSave ? 'Saving case…' : 'Checking SAP…';
+
+      try {
+        let checkResult = null;
+        if (NEW_ENQUIRY.pendingCaseSave && NEW_ENQUIRY.lastCheck) {
+          checkResult = NEW_ENQUIRY.lastCheck.result;
+        } else {
+          const payload = buildFormPayload();
+          const validationError = validateFormPayload(payload);
+          if (validationError) {
+            showGlobalError(validationError);
+            return;
+          }
+          if (statusArea) statusArea.textContent = '';
+          checkResult = await requestJson('/api/check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          NEW_ENQUIRY.lastCheck = { payload, result: checkResult };
+          NEW_ENQUIRY.dirty = false;
+          NEW_ENQUIRY.pendingCaseSave = false;
+          if (statusArea) statusArea.textContent = 'SAP check complete. Creating case…';
+        }
+
+        const casePayload = buildCasePayload(checkResult);
+        const created = await requestJson('/api/cases', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(casePayload)
+        });
+
+        if (!created || !created.caseId) {
+          throw new Error('The case was not created.');
+        }
+        window.location.href = `result.html?id=${encodeURIComponent(created.caseId)}`;
+      } catch (error) {
+        if (NEW_ENQUIRY.lastCheck) {
+          NEW_ENQUIRY.pendingCaseSave = true;
+          showGlobalError(`${error.message} SAP check succeeded; you can retry saving the case without running the check again.`);
+        } else {
+          showGlobalError(error.message || 'Unable to check with SAP. Please try again.');
+        }
+      } finally {
+        NEW_ENQUIRY.isSubmitting = false;
+        updateSubmitState();
+      }
+    });
+  }
+
+  const quantityError = document.getElementById('quantity-error');
+  if (quantityError) quantityError.hidden = true;
+}
+
+function validateFormPayload(payload) {
+  if (!payload || !payload.pathway) return 'Please choose a pathway.';
+  if (payload.pathway === 'STANDARD_RETAIL' || payload.pathway === 'SPECIAL_ORDER') {
+    if (!payload.productId) return 'Please select a product.';
+    if (!Number.isFinite(payload.requestedQty) || payload.requestedQty <= 0) {
+      return 'Please enter a quantity greater than zero.';
+    }
+  }
+  if (payload.pathway === 'TRADE' && !payload.customerId) {
+    return 'Please select a customer.';
+  }
+  if (payload.pathway === 'TRADE' && !payload.quotationId) {
+    return 'Please select a quotation.';
+  }
+  return '';
+}
+
+// ===== Result page =====
+
+const RESULT_PAGE = {
+  caseId: null,
+  caseData: null,
+  isSubmitting: false
+};
+
+function getCaseIdFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('id');
+}
+
+function formatDateForInput(isoString) {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().split('T')[0];
+}
+
+function paymentTermsLabel(code) {
+  const terms = {
+    '0001': 'Immediate',
+    '0002': '14 days',
+    '0003': '30 days',
+    '0004': '30 days net',
+    '0005': '60 days net',
+    '0006': '90 days net'
+  };
+  return terms[code] || code;
+}
+
+function processStatusLabel(code) {
+  const statuses = {
+    'A': 'Not yet processed',
+    'B': 'Partially processed',
+    'C': 'Completely processed'
+  };
+  return statuses[code] || code;
+}
+
+function deliveryStatusLabel(code) {
+  const statuses = {
+    'A': 'Not yet delivered',
+    'B': 'Partially delivered',
+    'C': 'Fully delivered'
+  };
+  return statuses[code] || code;
+}
+
+function blockStatusLabel(isBlocked) {
+  return isBlocked ? 'Yes — account has blocks' : 'No — account is clear';
+}
+
+function deletedStatusLabel(isDeleted) {
+  return isDeleted ? 'Yes — marked for deletion' : 'No';
+}
+
+function sufficientLabel(sufficient) {
+  return sufficient ? 'Yes — sufficient' : 'No — insufficient';
+}
+
+function actionLabel(action) {
+  const labels = {
+    'TRANSFER': 'Arrange stock transfer',
+    'SPECIAL_ORDER': 'Arrange special order',
+    'REQUOTE': 'Create a new quotation',
+    'CHECK_REJECTION': 'Check rejected item'
+  };
+  return labels[action] || action;
+}
+
+function renderCustomerCard(customer) {
+  const card = document.getElementById('customer-card');
+  if (!customer || !card) return;
+  document.getElementById('customer-name').textContent = customer.name || '—';
+  document.getElementById('customer-id').textContent = customer.customerId || customer.id || '—';
+  document.getElementById('customer-status').textContent = customer.isBlocked ? 'Blocked' : 'Active';
+  document.getElementById('customer-blocked').textContent = blockStatusLabel(customer.isBlocked);
+  document.getElementById('customer-deleted').textContent = deletedStatusLabel(customer.isDeleted);
+  const paymentTerms = customer.salesAreas?.[0]?.paymentTerms;
+  document.getElementById('customer-payment-terms').textContent = paymentTerms ? paymentTermsLabel(paymentTerms) : '—';
+  card.hidden = false;
+}
+
+function renderQuotationCard(quotation) {
+  const card = document.getElementById('quotation-card');
+  if (!quotation || !card) return;
+  document.getElementById('quotation-id').textContent = quotation.quotationId || '—';
+  document.getElementById('quotation-date').textContent = quotation.date || '—';
+  document.getElementById('quotation-valid-to').textContent = quotation.validTo || '—';
+  document.getElementById('quotation-status').textContent = processStatusLabel(quotation.processStatus);
+  document.getElementById('quotation-payment-terms').textContent = quotation.paymentTerms ? paymentTermsLabel(quotation.paymentTerms) : '—';
+  document.getElementById('quotation-total').textContent = money(quotation.totalNet, quotation.currency);
+  const expiredNotice = document.getElementById('quotation-expired-notice');
+  if (quotation.isExpired) {
+    expiredNotice.textContent = 'Expired — this quotation is past its validity date.';
+    expiredNotice.hidden = false;
+  } else {
+    expiredNotice.hidden = true;
+  }
+  card.hidden = false;
+}
+
+function renderStockTable(stock, quotation) {
+  const tbody = document.getElementById('stock-rows');
+  const noStockMsg = document.getElementById('no-stock-message');
+  const section = document.getElementById('stock-section');
+  if (!tbody || !section) return;
+  tbody.innerHTML = '';
+
+  // For Trade / quotation-based results, build rows from quotation.items
+  // and match to stock by material. For Standard Retail / product-only
+  // Special Order, fall back to stock array directly.
+  const hasQuotationItems = quotation && Array.isArray(quotation.items) && quotation.items.length > 0;
+  const itemsToRender = hasQuotationItems ? quotation.items : (Array.isArray(stock) ? stock : []);
+
+  if (itemsToRender.length === 0) {
+    noStockMsg.textContent = 'No stock items to display.';
+    noStockMsg.hidden = false;
+    section.hidden = false;
+    return;
+  }
+
+  noStockMsg.hidden = true;
+
+  // Build a lookup map from stock array by material for matching
+  const stockByMaterial = new Map();
+  if (Array.isArray(stock)) {
+    for (const s of stock) {
+      if (s.material) stockByMaterial.set(s.material, s);
+    }
+  }
+
+  for (const item of itemsToRender) {
+    const tr = document.createElement('tr');
+    const material = item.material;
+    const description = item.description || '—';
+    const isRejected = item.isRejected === true;
+    const matchedStock = material ? stockByMaterial.get(material) : null;
+
+    let required, unit, unrestrictedQty, sufficient, otherPlantsText, stockStatusHtml;
+
+    if (isRejected) {
+      // Rejected quotation item — backend did not query stock
+      required = Number(item.qty || 0);
+      unit = item.unit || '—';
+      unrestrictedQty = 'Not checked';
+      sufficient = false;
+      otherPlantsText = 'Not checked — item rejected';
+      stockStatusHtml = `<span class="chip chip--follow-up">Rejected (reason ${escapeHtml(item.rejectionReason || 'unknown')})</span>`;
+      tr.style.background = '#fef2f2'; // subtle red tint for rejected rows
+    } else if (matchedStock) {
+      // Non-rejected item with stock data
+      required = Number(matchedStock.required || item.qty || 0);
+      unit = matchedStock.unit || item.unit || '—';
+      unrestrictedQty = Number(matchedStock.unrestrictedQty || 0);
+      sufficient = matchedStock.sufficient === true;
+      otherPlantsText = (Array.isArray(matchedStock.otherPlants) && matchedStock.otherPlants.length > 0)
+        ? matchedStock.otherPlants.map(p => `${p.plant}: ${Number(p.unrestrictedQty).toLocaleString()} ${p.unit || unit}`).join('; ')
+        : 'No other store with sufficient stock';
+      stockStatusHtml = `<span class="${sufficient ? 'chip chip--resolve-now' : 'chip chip--create-follow-up'}">${escapeHtml(sufficientLabel(sufficient))}</span>`;
+    } else {
+      // Non-rejected item but no stock match (should not happen normally)
+      required = Number(item.qty || 0);
+      unit = item.unit || '—';
+      unrestrictedQty = 'No data';
+      sufficient = false;
+      otherPlantsText = 'No stock data available';
+      stockStatusHtml = `<span class="chip chip--create-follow-up">Unknown</span>`;
+    }
+
+    tr.innerHTML = `
+      <td><span class="mono">${escapeHtml(material)}</span></td>
+      <td>${escapeHtml(description)}</td>
+      <td>${Number.isFinite(required) ? required.toLocaleString() : escapeHtml(String(required))}</td>
+      <td>${Number.isFinite(unrestrictedQty) ? unrestrictedQty.toLocaleString() : escapeHtml(String(unrestrictedQty))}</td>
+      <td>${escapeHtml(unit)}</td>
+      <td>${stockStatusHtml}</td>
+      <td>${escapeHtml(otherPlantsText)}</td>
+      <td>${isRejected ? `<span class="chip chip--follow-up">Rejected (reason ${escapeHtml(item.rejectionReason || 'unknown')})</span>` : ''}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  section.hidden = false;
+}
+
+function renderOrdersCard(orders) {
+  const card = document.getElementById('orders-card');
+  const convertedStatus = document.getElementById('orders-converted-status');
+  const list = document.getElementById('orders-list');
+  if (!card || !orders) return;
+  if (!orders.converted || !Array.isArray(orders.orders) || orders.orders.length === 0) {
+    convertedStatus.textContent = 'This quotation has not been converted to an order.';
+    list.innerHTML = '';
+    card.hidden = false;
+    return;
+  }
+  convertedStatus.textContent = `Converted — ${orders.orders.length} order(s) found.`;
+  list.innerHTML = '';
+  for (const order of orders.orders) {
+    const div = document.createElement('div');
+    div.className = 'order-item';
+    div.style.marginBottom = '1rem';
+    div.style.padding = '1rem';
+    div.style.border = '1px solid var(--border)';
+    div.style.borderRadius = '10px';
+    div.style.background = 'var(--card)';
+    div.innerHTML = `
+      <div style="display: grid; gap: 0.5rem; margin-bottom: 0.75rem;">
+        <div><strong>Order ID:</strong> <span class="mono">${escapeHtml(order.salesOrderId)}</span></div>
+        <div><strong>Date:</strong> ${escapeHtml(order.orderDate)}</div>
+        <div><strong>Total:</strong> ${escapeHtml(money(order.totalNet, order.currency))}</div>
+        <div><strong>Process status:</strong> ${escapeHtml(processStatusLabel(order.processStatus))}</div>
+        <div><strong>Delivery status:</strong> ${escapeHtml(deliveryStatusLabel(order.deliveryStatus))} ${order.fullyDelivered ? '(Fully delivered)' : '(Not fully delivered)'}</div>
+      </div>
+      <div class="table-wrap" style="max-height: 200px; overflow-y: auto;">
+        <table class="stock-table" style="min-width: 600px;">
+          <thead><tr><th>Item</th><th>Material</th><th>Description</th><th>Qty</th><th>Amount</th><th>Delivery</th></tr></thead>
+          <tbody>
+            ${(order.items || []).map(item => `
+              <tr>
+                <td>${escapeHtml(item.itemNo)}</td>
+                <td><span class="mono">${escapeHtml(item.material)}</span></td>
+                <td>${escapeHtml(item.description || '—')}</td>
+                <td>${Number(item.qty || 0).toLocaleString()}</td>
+                <td>${escapeHtml(money(item.netAmount, order.currency))}</td>
+                <td>${escapeHtml(deliveryStatusLabel(item.deliveryStatus))}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    list.appendChild(div);
+  }
+  card.hidden = false;
+}
+
+function renderFlags(flags) {
+  const specialistList = document.getElementById('flags-specialist-list');
+  const followupList = document.getElementById('flags-followup-list');
+  const infoList = document.getElementById('flags-info-list');
+  const specialistGroup = document.getElementById('flags-specialist');
+  const followupGroup = document.getElementById('flags-followup');
+  const infoGroup = document.getElementById('flags-info');
+  const noFlagsMsg = document.getElementById('no-flags-message');
+  const section = document.getElementById('flags-section');
+
+  specialistList.innerHTML = '';
+  followupList.innerHTML = '';
+  infoList.innerHTML = '';
+
+  if (!Array.isArray(flags) || flags.length === 0) {
+    noFlagsMsg.hidden = false;
+    specialistGroup.hidden = true;
+    followupGroup.hidden = true;
+    infoGroup.hidden = true;
+    return;
+  }
+
+  noFlagsMsg.hidden = true;
+  let hasSpecialist = false, hasFollowup = false, hasInfo = false;
+
+  for (const flag of flags) {
+    const li = document.createElement('li');
+    li.style.marginBottom = '0.75rem';
+    li.style.padding = '0.75rem';
+    li.style.border = '1px solid var(--border)';
+    li.style.borderRadius = '8px';
+    li.style.background = 'var(--card)';
+    const actionText = flag.action ? ` → Suggested: ${actionLabel(flag.action)}` : '';
+    li.innerHTML = `
+      <div style="font-weight: 600; color: var(--header);">${escapeHtml(flag.rule)} (${escapeHtml(flag.severity)})</div>
+      <div style="margin-top: 0.25rem;">${escapeHtml(flag.message)}${escapeHtml(actionText)}</div>
+    `;
+    if (flag.severity === 'SPECIALIST') {
+      specialistList.appendChild(li);
+      hasSpecialist = true;
+    } else if (flag.severity === 'FOLLOW_UP') {
+      followupList.appendChild(li);
+      hasFollowup = true;
+    } else {
+      infoList.appendChild(li);
+      hasInfo = true;
+    }
+  }
+  specialistGroup.hidden = !hasSpecialist;
+  followupGroup.hidden = !hasFollowup;
+  infoGroup.hidden = !hasInfo;
+}
+
+function renderActionPanel(recommendation, flags) {
+  const resolvePanel = document.getElementById('action-resolve-now');
+  const specialistPanel = document.getElementById('action-request-specialist');
+  const followupPanel = document.getElementById('action-create-followup');
+  const desc = document.getElementById('action-description');
+
+  resolvePanel.hidden = true;
+  specialistPanel.hidden = true;
+  followupPanel.hidden = true;
+
+  if (recommendation === 'RESOLVE_NOW') {
+    resolvePanel.hidden = false;
+    desc.textContent = 'All checks passed. You can resolve this enquiry now.';
+  } else if (recommendation === 'REQUEST_SPECIALIST') {
+    specialistPanel.hidden = false;
+    desc.textContent = 'A specialist must review this enquiry before it can be resolved.';
+  } else if (recommendation === 'CREATE_FOLLOW_UP') {
+    followupPanel.hidden = false;
+    desc.textContent = 'This enquiry requires a follow-up. Assign an owner and due date.';
+    const suggested = document.getElementById('suggested-actions');
+    if (Array.isArray(flags)) {
+      const actions = flags
+        .filter(f => f.action)
+        .map(f => actionLabel(f.action));
+      if (actions.length > 0) {
+        suggested.textContent = 'Suggested actions from flags: ' + [...new Set(actions)].join(', ');
+        suggested.hidden = false;
+      } else {
+        suggested.hidden = true;
+      }
+    }
+    const dueInput = document.getElementById('followup-due-date');
+    if (dueInput && !dueInput.value) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      dueInput.value = tomorrow.toISOString().split('T')[0];
+    }
+  }
+}
+
+async function loadCase(caseId) {
+  const loading = document.getElementById('loading-state');
+  const errorBanner = document.getElementById('global-error');
+  const retryBtn = document.getElementById('global-error-retry');
+  const content = document.getElementById('result-content');
+
+  loading.hidden = false;
+  errorBanner.hidden = true;
+  content.hidden = true;
+
+  try {
+    const data = await requestJson(`/api/cases/${encodeURIComponent(caseId)}`);
+    RESULT_PAGE.caseData = data;
+    renderResult(data);
+    loading.hidden = true;
+    content.hidden = false;
+  } catch (error) {
+    loading.hidden = true;
+    errorBanner.hidden = false;
+    document.getElementById('global-error-text').textContent = error.message || 'Failed to load case. Please try again.';
+    retryBtn.hidden = false;
+  }
+}
+
+function renderResult(caseData) {
+  document.getElementById('case-id').textContent = caseData.caseId || '—';
+  document.getElementById('recommendation-chip').textContent = statusLabel(caseData.recommendation);
+  document.getElementById('recommendation-chip').className = `chip ${statusClass(caseData.recommendation)}`;
+  document.getElementById('pathway-chip').textContent = labelFromPathway(caseData.pathway);
+  document.getElementById('pathway-chip').className = `chip chip--${caseData.pathway.toLowerCase().replace('_', '-')}`;
+
+  const sap = caseData.sapSnapshot;
+  if (sap) {
+    document.getElementById('result-source').textContent = `Live SAP · Checked ${formatDateTime(sap.checkedAt)}`;
+    if (sap.customer) renderCustomerCard(sap.customer);
+    if (sap.quotation) renderQuotationCard(sap.quotation);
+    if (sap.stock) renderStockTable(sap.stock, sap.quotation);
+    if (sap.orders) renderOrdersCard(sap.orders);
+    if (sap.flags) renderFlags(sap.flags);
+    renderActionPanel(caseData.recommendation, sap.flags);
+  }
+}
+
+function showActionError(panelId, message) {
+  const statusEl = document.getElementById(`${panelId}-status`);
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.style.color = 'var(--danger-text)';
+  }
+}
+
+function showActionLoading(panelId, message) {
+  const statusEl = document.getElementById(`${panelId}-status`);
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.style.color = 'var(--muted)';
+  }
+}
+
+async function handleResolveNow(caseId) {
+  const btn = document.getElementById('btn-resolve-now');
+  if (!btn || RESULT_PAGE.isSubmitting) return;
+  RESULT_PAGE.isSubmitting = true;
+  btn.disabled = true;
+  showActionLoading('resolve', 'Resolving…');
+  try {
+    await requestJson(`/api/cases/${encodeURIComponent(caseId)}/resolve`, { method: 'POST' });
+    window.location.href = `case.html?id=${encodeURIComponent(caseId)}`;
+  } catch (error) {
+    showActionError('resolve', error.message || 'Failed to resolve. Please try again.');
+    btn.disabled = false;
+    RESULT_PAGE.isSubmitting = false;
+  }
+}
+
+async function handleRequestSpecialist(caseId) {
+  const btn = document.getElementById('btn-request-specialist');
+  if (!btn || RESULT_PAGE.isSubmitting) return;
+  RESULT_PAGE.isSubmitting = true;
+  btn.disabled = true;
+  showActionLoading('specialist', 'Requesting specialist…');
+  try {
+    await requestJson(`/api/cases/${encodeURIComponent(caseId)}/request-specialist`, { method: 'POST' });
+    window.location.href = `case.html?id=${encodeURIComponent(caseId)}`;
+  } catch (error) {
+    showActionError('specialist', error.message || 'Failed to request specialist. Please try again.');
+    btn.disabled = false;
+    RESULT_PAGE.isSubmitting = false;
+  }
+}
+
+async function handleCreateFollowup(caseId) {
+  const form = document.getElementById('followup-form');
+  const btn = document.getElementById('btn-create-followup');
+  if (!form || !btn || RESULT_PAGE.isSubmitting) return;
+  const owner = document.getElementById('followup-owner').value.trim();
+  const dueDate = document.getElementById('followup-due-date').value;
+  const customerNotified = document.getElementById('followup-customer-notified').checked;
+  const ownerError = document.getElementById('followup-owner-error');
+  const dueDateError = document.getElementById('followup-due-date-error');
+  ownerError.hidden = !!owner;
+  dueDateError.hidden = !!dueDate;
+  if (!owner || !dueDate) return;
+  RESULT_PAGE.isSubmitting = true;
+  btn.disabled = true;
+  showActionLoading('followup', 'Creating follow-up…');
+  try {
+    await requestJson(`/api/cases/${encodeURIComponent(caseId)}/follow-up`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner, dueDate, customerNotified })
+    });
+    window.location.href = `case.html?id=${encodeURIComponent(caseId)}`;
+  } catch (error) {
+    showActionError('followup', error.message || 'Failed to create follow-up. Please try again.');
+    btn.disabled = false;
+    RESULT_PAGE.isSubmitting = false;
+  }
+}
+
+function initResultPage() {
+  const caseId = getCaseIdFromUrl();
+  if (!caseId) {
+    document.getElementById('loading-state').hidden = true;
+    document.getElementById('global-error').hidden = false;
+    document.getElementById('global-error-text').textContent = 'No case ID provided. Please return to New Enquiry and submit a check.';
+    document.getElementById('global-error-retry').hidden = true;
+    return;
+  }
+  RESULT_PAGE.caseId = caseId;
+  loadCase(caseId);
+
+  const retryBtn = document.getElementById('global-error-retry');
+  if (retryBtn) {
+    retryBtn.addEventListener('click', () => loadCase(caseId));
+  }
+
+  const resolveBtn = document.getElementById('btn-resolve-now');
+  if (resolveBtn) resolveBtn.addEventListener('click', () => handleResolveNow(caseId));
+
+  const specialistBtn = document.getElementById('btn-request-specialist');
+  if (specialistBtn) specialistBtn.addEventListener('click', () => handleRequestSpecialist(caseId));
+
+  const followupForm = document.getElementById('followup-form');
+  if (followupForm) {
+    followupForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      handleCreateFollowup(caseId);
+    });
+  }
+}
+
+function init() {
+  initDashboard();
+}
+
 App.registerPage('dashboard', initDashboard);
+App.registerPage('new-enquiry', initNewEnquiry);
+App.registerPage('result', initResultPage);
 
 document.addEventListener('DOMContentLoaded', () => App.initPages());
