@@ -294,12 +294,14 @@ body {
 .chip {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 0.35rem;
   padding: 0.28rem 0.62rem;
   border-radius: 999px;
   font-size: 0.82rem;
   font-weight: 700;
   line-height: 1;
+  white-space: nowrap;
   border: 1px solid transparent;
 }
 

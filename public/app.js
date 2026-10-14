@@ -49,7 +49,12 @@ async function requestJson(url, options) {
 }
 
 function formatPercentage(value) {
-  return `${numberOrZero(value)}%`;
+  const percentage = numberOrZero(value);
+  const rounded = Math.round((percentage + Number.EPSILON) * 10) / 10;
+  return `${rounded.toLocaleString('en-NZ', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1
+  })}%`;
 }
 
 function formatDuration(seconds) {
@@ -1625,6 +1630,14 @@ function renderSpecialistSection(specialist, caseStatus) {
   const adviceText = document.getElementById('spec-advice-text');
   const adviceAt = document.getElementById('spec-advice-at');
   const adviceForm = document.getElementById('spec-advice-form');
+  const adviceSection = document.getElementById('spec-advice-section');
+
+  // Advice is relevant only after a specialist handover has been requested.
+  adviceSection.hidden = !specialist.requested;
+  if (!specialist.requested) {
+    adviceForm.hidden = true;
+    return;
+  }
 
   if (specialist.advice) {
     adviceText.textContent = specialist.advice;
