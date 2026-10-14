@@ -6,33 +6,75 @@
   <title>Frontline Service Assistant</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
+<body data-page="dashboard">
   <header class="site-header">
-    <div class="container">
-      <h1>Frontline Service Assistant</h1>
-      <p class="subtitle">Supports frontline customer enquiries across Standard Retail, Trade and Special Order pathways.</p>
-      <p class="prototype-label">University prototype — not an official Bunnings product</p>
+    <div class="container header-row">
+      <div>
+        <h1>Frontline Service Assistant</h1>
+        <p class="subtitle">Operational dashboard for frontline customer enquiries.</p>
+        <p class="prototype-label">University prototype — not an official Bunnings product</p>
+      </div>
+      <a class="button button--primary header-action" href="new.html">New Enquiry</a>
     </div>
   </header>
 
-  <main class="container">
-    <section aria-labelledby="pathways-heading" class="pathways">
-      <h2 id="pathways-heading">Choose a pathway</h2>
-      <div class="card-grid">
-        <article class="card" tabindex="0">
-          <h3>Standard Retail</h3>
-          <p>Check product stock and resolve simple enquiries at first contact.</p>
+  <main class="container page-main">
+    <div id="dashboard-error" class="error-banner" role="alert" hidden>
+      <p>Unable to load dashboard data. Please try again.</p>
+      <button type="button" class="button button--secondary" id="dashboard-retry">Retry</button>
+    </div>
+
+    <div id="dashboard-loading" class="loading-state" aria-live="polite">
+      Loading dashboard data…
+    </div>
+
+    <section aria-labelledby="kpi-heading" class="section-block">
+      <h2 id="kpi-heading" class="section-title">Today’s activity</h2>
+      <div class="kpi-grid">
+        <article class="kpi-card">
+          <h3>Enquiries Today</h3>
+          <p class="kpi-value" id="kpi-enquiries">0</p>
         </article>
-        <article class="card" tabindex="0">
-          <h3>Trade</h3>
-          <p>Review customer accounts, quotations, stock and orders.</p>
+        <article class="kpi-card">
+          <h3>FCR Rate</h3>
+          <p class="kpi-value" id="kpi-fcr">0%</p>
         </article>
-        <article class="card" tabindex="0">
-          <h3>Special Order</h3>
-          <p>Assess stock shortages and arrange transfer or special order.</p>
+        <article class="kpi-card">
+          <h3>Open Follow-ups</h3>
+          <p class="kpi-value" id="kpi-followups">0</p>
+        </article>
+        <article class="kpi-card">
+          <h3>Average Contact Duration</h3>
+          <p class="kpi-value" id="kpi-duration">0 s</p>
         </article>
       </div>
-      <p class="integration-note">SAP workflow integration will be added in the next implementation step.</p>
+      <p class="secondary-metric">
+        Specialist handover rate: <strong id="kpi-handover">0%</strong>
+      </p>
+    </section>
+
+    <section aria-labelledby="cases-heading" class="section-block">
+      <div class="section-heading-row">
+        <h2 id="cases-heading" class="section-title">Case enquiries</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="case-table">
+          <thead>
+            <tr>
+              <th scope="col">Case</th>
+              <th scope="col">Created</th>
+              <th scope="col">Pathway</th>
+              <th scope="col">Identifiers</th>
+              <th scope="col">Recommendation</th>
+              <th scope="col">Status</th>
+              <th scope="col">Outcome</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="case-rows"></tbody>
+        </table>
+      </div>
+      <p class="empty-state" id="case-empty">No enquiries have been recorded yet.</p>
     </section>
   </main>
 
