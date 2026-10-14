@@ -1754,6 +1754,20 @@ function renderCaseDetail(caseData) {
   renderFollowupSection(caseData.followUp, caseData.status);
   renderHistory(caseData.history);
   renderCloseSection(caseData);
+
+  // Update Result page links
+  const caseId = caseData.caseId;
+  const resultHref = `result.html?id=${encodeURIComponent(caseId)}`;
+  const headerLink = document.getElementById('result-link');
+  if (headerLink) {
+    headerLink.href = resultHref;
+    headerLink.hidden = false;
+  }
+  const breadcrumbLink = document.getElementById('breadcrumb-result-link');
+  if (breadcrumbLink) {
+    breadcrumbLink.href = resultHref;
+    breadcrumbLink.hidden = false;
+  }
 }
 
 async function handleSaveAdvice(caseId) {

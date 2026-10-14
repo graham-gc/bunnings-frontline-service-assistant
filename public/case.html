@@ -17,6 +17,7 @@
       <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
         <a class="button button--secondary header-action" href="index.html">← Dashboard</a>
         <a class="button button--secondary header-action" href="new.html">New Enquiry</a>
+        <a class="button button--secondary header-action" id="result-link" href="#" hidden>SAP Result</a>
       </div>
     </div>
   </header>
@@ -24,7 +25,8 @@
   <main class="container page-main">
     <nav class="breadcrumb" aria-label="Breadcrumb">
       <a href="index.html">Dashboard</a> <span aria-hidden="true">/</span>
-      <a href="new.html">New Enquiry</a> <span aria-hidden="true">/</span> Case Detail
+      <a href="new.html">New Enquiry</a> <span aria-hidden="true">/</span>
+      <a href="result.html" id="breadcrumb-result-link" hidden>SAP Result</a> <span aria-hidden="true">/</span> Case Detail
     </nav>
 
     <div id="global-error" class="error-banner" role="alert" hidden>
