@@ -5,3 +5,4 @@
 - 2026-10-14: Implemented live SAP customer search and account lookup; tests for search, USCU-CUS01, XXXXXXXX, and blank search passed against the real sandbox.
 - 2026-10-14: Added live SAP product search and stock endpoints; live tests for Headlight, blank inputs, MZ-TG-A10 (63275 PC), FG226 (1010: 1000, 1710: 100, special-stock excluded), CM-FL-V00 (0 sellable), and blank material all passed.
 - 2026-10-14: Added live SAP quotation list, detail, and PPR0 pricing endpoints; live tests passed for USCU-CUS01, blank input, 20000003 (expired 2018-12-31, 3 items, item 20 rejected), 99999999, and item 10 pricing (unit price USD 17.55 PC, no PCIP/cost data).
+- 2026-10-14: Added live SAP sales-order-by-quotation endpoint; live tests passed for 20000004 (order 14, fully delivered, item 10 MZ-TG-A10 qty 4000 amount 70200), 99999999 (converted false, no orders), and blank quotation ID (400).
