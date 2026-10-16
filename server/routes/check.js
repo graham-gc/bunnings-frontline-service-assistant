@@ -347,6 +347,17 @@ router.post('/', async (req, res) => {
       }
       const customer = await fetchCustomer(customerId);
       const quotation = mapQuotation(await fetchQuotation(quotationId));
+
+      if (quotation.customerId && quotation.customerId !== customer.customerId) {
+        return res.status(400).json({
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'This quotation belongs to a different customer. Please select a quotation for the chosen customer.',
+            sapCode: null
+          }
+        });
+      }
+
       const orders = await getOrdersByQuotation(quotationId);
       const stock = [];
 
@@ -384,6 +395,10 @@ router.post('/', async (req, res) => {
     let orders = null;
     const stock = [];
 
+    if (customerId) {
+      customer = await fetchCustomer(customerId);
+    }
+
     if (hasProduct) {
       const description = await productDescription(productId);
       stock.push(await fetchStockEntry(productId, description, plant, Number(requestedQty)));
@@ -391,8 +406,19 @@ router.post('/', async (req, res) => {
 
     if (hasQuotation) {
       quotation = mapQuotation(await fetchQuotation(quotationId));
+
+      if (customer && quotation.customerId && quotation.customerId !== customer.customerId) {
+        return res.status(400).json({
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'This quotation belongs to a different customer. Please select a quotation for the chosen customer.',
+            sapCode: null
+          }
+        });
+      }
+
       orders = await getOrdersByQuotation(quotationId);
-      if (quotation.customerId) {
+      if (!customer && quotation.customerId) {
         try {
           customer = await fetchCustomer(quotation.customerId);
         } catch (err) {
@@ -419,10 +445,10 @@ router.post('/', async (req, res) => {
       checkedAt: checkedAt()
     });
   } catch (err) {
-    if (quotationId && err && err.code === 'NOT_FOUND') {
+    if (quotationId && err && err.code === 'NOT_FOUND' && !err.notFoundMessage) {
       err.notFoundMessage = 'Quotation not found. Please check the quote number.';
     }
-    if (customerId && err && err.code === 'NOT_FOUND' && !quotationId) {
+    if (customerId && err && err.code === 'NOT_FOUND' && !err.notFoundMessage) {
       err.notFoundMessage = 'Customer ID not found. Please check the number or search by name.';
     }
     return sendSapError(res, err, 'SAP is not responding. Please try again or use the manual process.');

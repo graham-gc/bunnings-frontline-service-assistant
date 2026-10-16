@@ -16,6 +16,7 @@ Option 1 implementation of the full A2 TO-BE frontline customer service model (W
 - **Specialist Advice** — PATCH specialist advice on open cases; history refreshed immediately.
 - **Follow-up Management** — owner, due date, customer-notified flag with timestamp recording; notification action on open cases.
 - **History Timeline** — chronological action log; auto-refreshes after advice, notification, close.
+- **Data-integrity safeguards** — customer/quotation combinations are validated, and closed cases are immutable at the API layer.
 - **FCR / Follow-up / Handover KPIs** — FCR rate = FCR cases / cases with outcome; contact duration = outcomeAt − createdAt; handover rate = cases with handoverCount > 0 / all cases.
 - **Responsive Interface** — desktop two-column New Enquiry; tablet/mobile single-column; tables scroll internally; visible keyboard focus; text-plus-colour status chips.
 

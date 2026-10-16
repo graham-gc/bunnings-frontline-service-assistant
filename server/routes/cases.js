@@ -42,6 +42,24 @@ function notFound(res) {
   return sendError(res, 404, 'NOT_FOUND', 'Case not found. Please check the case number.', null);
 }
 
+function requireEditable(item) {
+  if (item.status === 'CLOSED') {
+    const error = new Error('CASE_CLOSED');
+    error.code = 'CASE_CLOSED';
+    throw error;
+  }
+}
+
+function mutationError(res, error, fallbackMessage) {
+  if (error && (error.code === 'NOT_FOUND' || error.message === 'NOT_FOUND')) {
+    return notFound(res);
+  }
+  if (error && (error.code === 'CASE_CLOSED' || error.message === 'CASE_CLOSED')) {
+    return sendError(res, 409, 'CASE_CLOSED', 'This case is closed and can no longer be changed.', null);
+  }
+  return sendError(res, 500, 'INTERNAL_ERROR', fallbackMessage, null);
+}
+
 router.post('/cases', async (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
 
@@ -156,6 +174,7 @@ router.patch('/cases/:id', async (req, res) => {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
+      requireEditable(item);
 
       const now = nowIso();
       const historyEntries = [];
@@ -200,8 +219,7 @@ router.patch('/cases/:id', async (req, res) => {
     if (!updated) return notFound(res);
     return res.json(updated);
   } catch (error) {
-    if (error && error.message === 'NOT_FOUND') return notFound(res);
-    return sendError(res, 500, 'INTERNAL_ERROR', 'The case could not be updated. Please try again.', null);
+    return mutationError(res, error, 'The case could not be updated. Please try again.');
   }
 });
 
@@ -213,6 +231,7 @@ router.post('/cases/:id/resolve', async (req, res) => {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
+      requireEditable(item);
 
       const now = nowIso();
       item.outcome = 'FCR';
@@ -227,8 +246,7 @@ router.post('/cases/:id/resolve', async (req, res) => {
     if (!updated) return notFound(res);
     return res.json(updated);
   } catch (error) {
-    if (error && error.message === 'NOT_FOUND') return notFound(res);
-    return sendError(res, 500, 'INTERNAL_ERROR', 'The case could not be resolved. Please try again.', null);
+    return mutationError(res, error, 'The case could not be resolved. Please try again.');
   }
 });
 
@@ -240,6 +258,7 @@ router.post('/cases/:id/request-specialist', async (req, res) => {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
+      requireEditable(item);
 
       const now = nowIso();
       const issues = Array.isArray(item.flags)
@@ -267,8 +286,7 @@ router.post('/cases/:id/request-specialist', async (req, res) => {
     if (!updated) return notFound(res);
     return res.json(updated);
   } catch (error) {
-    if (error && error.message === 'NOT_FOUND') return notFound(res);
-    return sendError(res, 500, 'INTERNAL_ERROR', 'The specialist request could not be created. Please try again.', null);
+    return mutationError(res, error, 'The specialist request could not be created. Please try again.');
   }
 });
 
@@ -292,6 +310,7 @@ router.post('/cases/:id/follow-up', async (req, res) => {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
+      requireEditable(item);
 
       const now = nowIso();
       item.status = 'FOLLOW_UP';
@@ -316,8 +335,7 @@ router.post('/cases/:id/follow-up', async (req, res) => {
     if (!updated) return notFound(res);
     return res.json(updated);
   } catch (error) {
-    if (error && error.message === 'NOT_FOUND') return notFound(res);
-    return sendError(res, 500, 'INTERNAL_ERROR', 'The follow-up could not be saved. Please try again.', null);
+    return mutationError(res, error, 'The follow-up could not be saved. Please try again.');
   }
 });
 
@@ -329,6 +347,7 @@ router.post('/cases/:id/close', async (req, res) => {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
+      requireEditable(item);
 
       const now = nowIso();
       item.status = 'CLOSED';
@@ -340,8 +359,7 @@ router.post('/cases/:id/close', async (req, res) => {
     if (!updated) return notFound(res);
     return res.json(updated);
   } catch (error) {
-    if (error && error.message === 'NOT_FOUND') return notFound(res);
-    return sendError(res, 500, 'INTERNAL_ERROR', 'The case could not be closed. Please try again.', null);
+    return mutationError(res, error, 'The case could not be closed. Please try again.');
   }
 });
 

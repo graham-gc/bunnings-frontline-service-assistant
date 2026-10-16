@@ -46,6 +46,7 @@ DEFAULT_PLANT=1710
 |---|---|---|---|
 | `NOT_FOUND` | 404 | SAP 404 or `/IWBEP/CM_MGW_RT/020` | Customer: "Customer ID not found. Please check the number or search by name." · Quotation: "Quotation not found. Please check the quote number." · Product: "Product not found. Try a different name." |
 | `BAD_REQUEST` | 400 | Missing or invalid input | "Please enter ___ before checking SAP." |
+| `CASE_CLOSED` | 409 | A write is attempted after a case has been closed | "This case is closed and can no longer be changed." |
 | `SAP_UNAVAILABLE` | 503 | Network error or SAP 5xx response | "SAP is not responding. Please try again or use the manual process." |
 
 ### How to detect NOT_FOUND (tested in the sandbox)
@@ -382,6 +383,8 @@ Stored in `data/cases.json`.
 | POST | `/api/cases/:id/follow-up` | Body `{ owner, dueDate, customerNotified }` → `status = FOLLOW_UP`, `outcome = NON_FCR`, set `outcomeAt`, `contactDurationSec` |
 | POST | `/api/cases/:id/close` | `status = CLOSED` |
 | GET | `/api/kpi` | `{ enquiriesToday, fcrRate, openFollowUps, avgContactDurationSec, handoverRate }` |
+
+Once `status = CLOSED`, PATCH, resolve, request-specialist, follow-up and repeated close requests return HTTP 409 with `CASE_CLOSED`. Closed cases remain readable but are immutable.
 
 KPI definitions (from A2): K1 FCR rate = FCR cases / cases with an outcome. K2 = `outcomeAt − createdAt`. K3 = cases with `handoverCount > 0` / all cases.
 

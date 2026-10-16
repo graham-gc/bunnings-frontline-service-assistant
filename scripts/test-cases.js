@@ -348,8 +348,58 @@ async function runTests() {
     const closed = await request(`/api/cases/${caseB.caseId}/close`, { method: 'POST' });
     assert(closed.status === 200 && closed.data.status === 'CLOSED', 'Close case failed');
     pass('Close case');
+
+    const closedHistoryLength = closed.data.history.length;
+    const blockedMutations = [
+      {
+        name: 'PATCH',
+        path: `/api/cases/${caseB.caseId}`,
+        options: {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ specialist: { advice: 'This must not be saved.' } })
+        }
+      },
+      {
+        name: 'resolve',
+        path: `/api/cases/${caseB.caseId}/resolve`,
+        options: { method: 'POST' }
+      },
+      {
+        name: 'request specialist',
+        path: `/api/cases/${caseB.caseId}/request-specialist`,
+        options: { method: 'POST' }
+      },
+      {
+        name: 'follow-up',
+        path: `/api/cases/${caseB.caseId}/follow-up`,
+        options: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ owner: 'Alex', dueDate: '2026-10-17', customerNotified: false })
+        }
+      },
+      {
+        name: 'close again',
+        path: `/api/cases/${caseB.caseId}/close`,
+        options: { method: 'POST' }
+      }
+    ];
+
+    for (const mutation of blockedMutations) {
+      const response = await request(mutation.path, mutation.options);
+      assert(
+        response.status === 409 && response.data.error.code === 'CASE_CLOSED',
+        `Closed case accepted ${mutation.name}`
+      );
+    }
+
+    const unchanged = await request(`/api/cases/${caseB.caseId}`);
+    assert(unchanged.status === 200 && unchanged.data.status === 'CLOSED', 'Closed case status changed');
+    assert(unchanged.data.history.length === closedHistoryLength, 'Rejected closed-case operations changed history');
+    pass('Closed case rejects all further mutations');
   } catch (error) {
-    fail('Close case', error);
+    fail('Close case and enforce immutability', error);
   }
 
   try {

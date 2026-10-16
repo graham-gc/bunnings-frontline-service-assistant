@@ -72,6 +72,33 @@ async function run() {
     report('C1 Special Order', passed, passed ? '0 PC, R5b SPECIAL_ORDER, CREATE_FOLLOW_UP' : JSON.stringify(data));
   }
 
+  // Customer and quotation must describe the same SAP account.
+  {
+    const { status, data } = await apiCheck({
+      pathway: 'TRADE',
+      customerId: 'USCU-CUS02',
+      quotationId: '20000002',
+      plant: '1710'
+    });
+    const passed = status === 400
+      && data && data.error && data.error.code === 'BAD_REQUEST'
+      && /different customer/i.test(String(data.error.message));
+    report('Trade rejects customer/quotation mismatch', passed, passed ? 'HTTP 400 BAD_REQUEST' : JSON.stringify(data));
+  }
+
+  {
+    const { status, data } = await apiCheck({
+      pathway: 'SPECIAL_ORDER',
+      customerId: 'USCU-CUS02',
+      quotationId: '20000002',
+      plant: '1710'
+    });
+    const passed = status === 400
+      && data && data.error && data.error.code === 'BAD_REQUEST'
+      && /different customer/i.test(String(data.error.message));
+    report('Special Order rejects customer/quotation mismatch', passed, passed ? 'HTTP 400 BAD_REQUEST' : JSON.stringify(data));
+  }
+
   // C2 - Cross-store transfer
   {
     const { status, data } = await apiCheck({
