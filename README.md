@@ -76,19 +76,94 @@ npm start
 | `/result.html?id=<caseId>` | SAP Check Result | Live SAP snapshot, flags, recommendation action buttons |
 | `/case.html?id=<caseId>` | Case Detail | Summary, flags, SAP snapshot, specialist advice, follow-up, history, close |
 
-## Verified Demo Scenarios
+## Manual Acceptance Test Guide
 
-All scenarios run against the **live SAP sandbox**; sandbox values are external test data and may change over time.
+The following five scenarios were verified against the **live SAP sandbox on 16 October 2026**. This manual dataset is separate from the fixed records used by `scripts/test-rules.js`. SAP maintains the sandbox, so records and quantities may change later.
 
-| Scenario | Pathway | Input | Expected Result |
-|----------|---------|-------|-----------------|
-| **A** | Standard Retail | Product: Headlight → MZ-TG-A10, Qty 10 | Stock 63,275 PC → RESOLVE_NOW → Resolve → FCR |
-| **B** | Trade | Customer: World → USCU-CUS01, Quote: 20000003 | Expired 2018-12-31, Item 20 rejected (reason 77) → R3/R4 → CREATE_FOLLOW_UP → NON_FCR |
-| **C1** | Special Order | Product: Valve Assembly → D2O_XY00174197, Qty 2 | Stock 0 at 1710, no other plants → R5b SPECIAL_ORDER → CREATE_FOLLOW_UP → NON_FCR |
-| **C2** | Standard Retail | Material: FG226, Qty 200 | 100 PC at 1710, 1,000 PC at 1010 → R5a TRANSFER → CREATE_FOLLOW_UP → NON_FCR |
-| **D** | Trade | Customer: USCU-CUS01, Quote: 20000004 | Order 14 fully delivered (R2 INFO), Item 30 rejected (reason 70, R4) → CREATE_FOLLOW_UP → NON_FCR |
+Start with an empty `data/cases.json` containing `[]`. For every follow-up scenario, enter any owner name and a future due date, then select **Create follow-up**.
 
-**SAP sandbox values are external test data and may eventually change.**
+### Test 1 — Standard Retail: resolve at first contact
+
+1. Select **New Enquiry** → **Standard Retail**.
+2. Enter exact material ID `MZ-FG-E11` and select **Use exact material ID**.
+3. Enter requested quantity `10` and retrieval reason **Product availability**.
+4. Select **Check in SAP**.
+
+Expected result:
+
+- Product description: `eBike E11`.
+- Plant `1710` unrestricted stock: `82,010 PC`.
+- No rule flag; recommendation: **Resolve now**.
+- Selecting **Resolve now** records outcome **First contact resolved (FCR)**.
+
+### Test 2 — Trade: expired quotation and rejected item
+
+1. Select **New Enquiry** → **Trade**.
+2. Search customer name `World`, then select `USCU-CUS01` — World of Sports Inc.
+3. Select quotation `20000002` and retrieval reason **Quote status**.
+4. Select **Check in SAP**.
+
+Expected result:
+
+- Quotation valid-to date: `2018-12-31`; quotation is expired.
+- Item `10` (`MZ-TG-A10`, Headlight) is rejected with reason `70`.
+- No converted sales order.
+- Flags: **R3 / REQUOTE** and **R4 / CHECK_REJECTION**.
+- Recommendation: **Create follow-up**; outcome after assignment: **Follow-up recorded**.
+
+### Test 3 — Special Order: no sellable stock
+
+1. Select **New Enquiry** → **Special Order**.
+2. Enter exact material ID `MZ-TG-A19` and select **Use exact material ID**.
+3. Enter requested quantity `2` and retrieval reason **Product availability**.
+4. Leave the optional customer and quotation context blank, then select **Check in SAP**.
+
+Expected result:
+
+- Product description: `Headlight`.
+- Plant `1710` unrestricted stock: `0 PC`; no other plant has sufficient sellable stock.
+- Flag: **R5b / SPECIAL_ORDER**.
+- Suggested action: **Arrange special order**.
+- Recommendation: **Create follow-up**.
+
+### Test 4 — Standard Retail: cross-store transfer
+
+1. Select **New Enquiry** → **Standard Retail**.
+2. Enter exact material ID `MZ-FG-E300` and select **Use exact material ID**.
+3. Enter requested quantity `50` and retrieval reason **Product availability**.
+4. Select **Check in SAP**.
+
+Expected result:
+
+- Product description: `Headlight`.
+- Plant `1710` has `20 PC`, which is insufficient for the requested quantity.
+- Plants `US20` and `US10` each have `100 PC`.
+- Flag: **R5a / TRANSFER**.
+- Suggested action: **Arrange stock transfer**.
+- Recommendation: **Create follow-up**.
+
+### Test 5 — Trade: completed order with rejected quotation items
+
+1. Select **New Enquiry** → **Trade**.
+2. Search customer name `World`, then select `USCU-CUS01` — World of Sports Inc.
+3. Select quotation `20000005` and retrieval reason **Order status**.
+4. Select **Check in SAP**.
+
+Expected result:
+
+- The quotation has been converted to sales order `15`.
+- Order `15` is fully delivered, producing **R2 / INFO**.
+- Quotation items `10`, `20`, and `30` are rejected with reason `70`, producing **R4 / CHECK_REJECTION** flags.
+- **R3 is not raised** because the quotation has already been converted to an order.
+- Recommendation: **Create follow-up**.
+
+After all five cases are completed, the Dashboard should show:
+
+- **Enquiries Today:** 5
+- **FCR Rate:** 20% (1 of 5 outcomes)
+- **Open Follow-ups:** 4
+- **Specialist handover rate:** 0%
+- **Average Contact Duration:** a numeric value that depends on testing speed
 
 ## Tests
 
@@ -100,7 +175,7 @@ npm run test:rules
 npm run test:cases
 ```
 
-Local acceptance testing was completed successfully on 14 October 2026 using the SAP sandbox data available at that time. Because the sandbox is externally maintained, returned records and values may change.
+Local acceptance testing was completed successfully on 16 October 2026 using the SAP sandbox data available at that time. Because the sandbox is externally maintained, returned records and values may change.
 
 **Clean KPI Checkpoint (before specialist request)**:
 - 5 enquiries today
