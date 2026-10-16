@@ -47,6 +47,7 @@ DEFAULT_PLANT=1710
 | `NOT_FOUND` | 404 | SAP 404 or `/IWBEP/CM_MGW_RT/020` | Customer: "Customer ID not found. Please check the number or search by name." · Quotation: "Quotation not found. Please check the quote number." · Product: "Product not found. Try a different name." |
 | `BAD_REQUEST` | 400 | Missing or invalid input | "Please enter ___ before checking SAP." |
 | `CASE_CLOSED` | 409 | A write is attempted after a case has been closed | "This case is closed and can no longer be changed." |
+| `INVALID_STATE` | 409 | A case action is repeated or is not allowed from the current status | Plain-English explanation of the valid next step |
 | `SAP_UNAVAILABLE` | 503 | Network error or SAP 5xx response | "SAP is not responding. Please try again or use the manual process." |
 
 ### How to detect NOT_FOUND (tested in the sandbox)
@@ -367,7 +368,13 @@ Stored in `data/cases.json`.
 }
 ```
 
-`status`: `OPEN` → `AWAITING_SPECIALIST` / `FOLLOW_UP` → `RESOLVED` → `CLOSED`
+Allowed status transitions:
+
+- `OPEN` → `RESOLVED`, `AWAITING_SPECIALIST`, or `FOLLOW_UP`;
+- `AWAITING_SPECIALIST` → `FOLLOW_UP` after advice, or `CLOSED` after advice;
+- `RESOLVED` → `CLOSED`;
+- `FOLLOW_UP` → `CLOSED`;
+- `CLOSED` is immutable.
 `outcome`: `FCR` | `NON_FCR`
 
 ### Endpoints
@@ -377,16 +384,16 @@ Stored in `data/cases.json`.
 | GET | `/api/cases?status=FOLLOW_UP` | List cases (newest first, optional status filter) |
 | POST | `/api/cases` | Create from a check result. Body: `{ pathway, customerId, quotationId, productId, requestedQty, retrievalReason, sapSnapshot }` |
 | GET | `/api/cases/:id` | One case |
-| PATCH | `/api/cases/:id` | Update any of: `specialist`, `followUp`, `status`; append to `history` |
+| PATCH | `/api/cases/:id` | While `AWAITING_SPECIALIST`, save non-blank `specialist.advice`; while `FOLLOW_UP`, set `followUp.customerNotified = true`; append to `history` |
 | POST | `/api/cases/:id/resolve` | FCR path: `outcome = FCR`, `status = RESOLVED`, set `outcomeAt`, `contactDurationSec` |
-| POST | `/api/cases/:id/request-specialist` | `status = AWAITING_SPECIALIST`, build `specialist.summary` from flags + SAP snapshot, `handoverCount + 1` |
-| POST | `/api/cases/:id/follow-up` | Body `{ owner, dueDate, customerNotified }` → `status = FOLLOW_UP`, `outcome = NON_FCR`, set `outcomeAt`, `contactDurationSec` |
-| POST | `/api/cases/:id/close` | `status = CLOSED` |
+| POST | `/api/cases/:id/request-specialist` | From `OPEN` only: `status = AWAITING_SPECIALIST`, `outcome = NON_FCR`, set outcome time/contact duration, build summary, `handoverCount + 1` |
+| POST | `/api/cases/:id/follow-up` | From `OPEN`, or from `AWAITING_SPECIALIST` after advice: body `{ owner, dueDate, customerNotified }`, future Auckland due date required → `status = FOLLOW_UP`, `outcome = NON_FCR` |
+| POST | `/api/cases/:id/close` | From `RESOLVED` or `FOLLOW_UP`, or from `AWAITING_SPECIALIST` after advice → `status = CLOSED` |
 | GET | `/api/kpi` | `{ enquiriesToday, fcrRate, openFollowUps, avgContactDurationSec, handoverRate }` |
 
-Once `status = CLOSED`, PATCH, resolve, request-specialist, follow-up and repeated close requests return HTTP 409 with `CASE_CLOSED`. Closed cases remain readable but are immutable.
+Invalid transitions and repeated actions return HTTP 409 with `INVALID_STATE`. Once `status = CLOSED`, PATCH, resolve, request-specialist, follow-up and repeated close requests return HTTP 409 with `CASE_CLOSED`. Closed cases remain readable but are immutable.
 
-KPI definitions (from A2): K1 FCR rate = FCR cases / cases with an outcome. K2 = `outcomeAt − createdAt`. K3 = cases with `handoverCount > 0` / all cases.
+KPI definitions (from A2): K1 FCR rate = FCR cases / cases with an outcome. K2 = `outcomeAt − createdAt`. K3 = cases with `handoverCount > 0` / all cases. Dashboard scope labels must state that enquiries are today, open follow-ups are current, FCR/contact duration use recorded outcomes, and handover rate uses all cases. “Today” uses `Pacific/Auckland`.
 
 ---
 
@@ -394,9 +401,9 @@ KPI definitions (from A2): K1 FCR rate = FCR cases / cases with an outcome. K2 =
 
 | Page | Content |
 |---|---|
-| `index.html` Dashboard | KPI cards (enquiries today, FCR rate, open follow-ups, average contact duration); case table with status chips (text + colour); "New Enquiry" button |
-| `new.html` New enquiry | Step 1: choose pathway (3 large buttons). Step 2: inputs — Standard retail: product search → pick → qty. Trade: customer search (name or ID) → pick → that customer's quotations → pick. Special order: product search + qty, optional customer/quote. Retrieval reason dropdown. Button "Check in SAP" → `POST /api/check`, then `POST /api/cases`, then go to `result.html?id=` |
-| `result.html` SAP check result | Customer card, quotation card (expired date in red with the word "Expired"), item table (required qty, stock at this store, **stock at other stores**, rejected rows marked), order card, flags list (with the suggested action: Transfer / Special order / Re-quote), data source + time. Buttons by recommendation: "Resolve now", "Request specialist", "Create follow-up" |
+| `index.html` Dashboard | Operational overview with scope-labelled KPI cards (today/current/recorded outcomes/all cases); case table with text + colour status chips; "New Enquiry" button |
+| `new.html` New enquiry | Step 1: choose pathway. Step 2: Standard retail uses product + qty; Trade uses customer + that customer's quotation; Special order explicitly selects product + qty or quotation-only mode. Step 3 uses one immutable input snapshot for `/api/check` and `/api/cases`, then opens `result.html?id=` |
+| `result.html` SAP check result | Customer card, quotation card (expired date in red with the word "Expired"), item table (required qty, stock at this store, **stock at other stores**, rejected rows marked), order card, flags list, data source + time. Recommendation action appears only while status is `OPEN`; processed cases link to Case Detail |
 | `case.html` Case detail | Summary, flags, SAP snapshot, specialist summary and advice box, follow-up owner / due date / "customer notified" tick box, history timeline, "Close case" |
 
 Usability rules: clear labels, required fields marked *, plain-English errors, loading indicator while SAP is called, back link on every page, no colour-only status.
@@ -412,9 +419,11 @@ Usability rules: clear labels, required fields marked *, plain-English errors, l
 | B | Trade | Search "World" → USCU-CUS01 → quote 20000003 | Flags R3 (expired) + R4 (item 20 rejected); stock sufficient; R6 passes (0004 = 0004) → CREATE_FOLLOW_UP → owner + due date → NON_FCR |
 | C1 | Special order | Search "Valve Assembly" → D2O_XY00174197, qty 2 | Stock 0 at 1710 and no other plant (confirmed: only one row, 1710, type 01, qty 0, unit EA) → R5b (SPECIAL_ORDER) → CREATE_FOLLOW_UP |
 | C2 | Standard retail → transfer | FG226, qty 200 | 100 sellable at 1710, plant 1010 has 1,000 (both confirmed type 01, no special stock) → R5a (TRANSFER) → CREATE_FOLLOW_UP. Product name is technical ("FIN226,MTO,PD,Batch-Fifo"), so use C2 as a functional test; showing it in the live demo is optional |
-| D | Trade / order status | USCU-CUS01 → quote 20000004 | R2: order 14 fully delivered (INFO); item 30 rejected (reason 70) triggers R4 with action `CHECK_REJECTION`; no R3; R5a/R5b/R6 not triggered → CREATE_FOLLOW_UP → NON_FCR || E | Error | Customer ID XXXXXXXX | "Customer ID not found…" message, no crash (works for both 404 body formats) |
+| D | Trade / order status | USCU-CUS01 → quote 20000004 | R2: order 14 fully delivered (INFO); item 30 rejected (reason 70) triggers R4 with action `CHECK_REJECTION`; no R3; R5a/R5b/R6 not triggered → CREATE_FOLLOW_UP → NON_FCR |
+| E | Error | Customer ID XXXXXXXX | "Customer ID not found…" message, no crash (works for both 404 body formats) |
 | F | Error | Quote 99999999 | "Quotation not found…" message (single GET 404; also via empty-array fallback) |
-| H | KPI | After A, B, C1, C2, D | Dashboard: 5 enquiries, FCR cases: 1 (A only), FCR rate: 20%, 4 open follow-ups (B, C1, C2, D) || I | Specialist | On case B, "Request specialist" → add advice | Status AWAITING_SPECIALIST, handoverCount 1, summary lists flags |
+| H | KPI | After A, B, C1, C2, D | Dashboard: 5 enquiries, FCR cases: 1 (A only), FCR rate: 20%, 4 open follow-ups (B, C1, C2, D) |
+| I | Specialist | On an open case, "Request specialist" → add advice | Status AWAITING_SPECIALIST, outcome NON_FCR, handoverCount 1, summary lists flags; repeated request returns INVALID_STATE; after advice create follow-up or close |
 | J | Stock total | FG226 at plant 1710 | Sellable 100: row in 171B counted; five special-stock E rows (20 PC reserved) in 171A excluded |
 | K | Sellable stock only | CM-FL-V00, all plants | Sellable stock 0 everywhere, although rows show 1 (type 07 and special stock E are excluded) |
 

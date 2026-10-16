@@ -63,6 +63,20 @@
         <section id="details-section" class="workflow-main" hidden aria-labelledby="step2-heading">
           <h2 id="step2-heading" class="section-title section-title--workspace">Step 2: Enter enquiry details</h2>
 
+          <fieldset class="form-section" id="special-order-mode-panel" hidden>
+            <legend>Special Order check method</legend>
+            <div class="mode-options" role="radiogroup" aria-label="Special Order check method">
+              <label class="mode-option">
+                <input type="radio" name="special-order-mode" value="PRODUCT" checked />
+                <span><strong>Check by product</strong><small>Use a material and requested quantity.</small></span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="special-order-mode" value="QUOTATION" />
+                <span><strong>Check by quotation</strong><small>Use a quotation number; customer ID is optional.</small></span>
+              </label>
+            </div>
+          </fieldset>
+
           <fieldset class="form-section" id="product-panel" hidden>
             <legend>Product details</legend>
             <div id="product-lookup-controls">
@@ -135,21 +149,21 @@
           </fieldset>
 
           <fieldset class="form-section" id="optional-context" hidden>
-            <legend>Optional context</legend>
-            <p class="field-help">Optional for the product-and-quantity Special Order flow.</p>
+            <legend>Customer and quotation context</legend>
+            <p class="field-help" id="special-order-context-help">Optional for the product-and-quantity Special Order flow.</p>
             <div class="field">
               <label for="optional-customer-id">Customer ID</label>
               <input id="optional-customer-id" type="text" autocomplete="off" placeholder="Optional" />
             </div>
             <div class="field">
-              <label for="optional-quotation-id">Quotation ID</label>
+              <label for="optional-quotation-id">Quotation ID <span id="optional-quotation-required" class="required-mark" hidden>*</span></label>
               <input id="optional-quotation-id" type="text" autocomplete="off" placeholder="Optional" />
             </div>
           </fieldset>
 
           <div class="form-section reason-section">
             <div class="field">
-              <label for="retrieval-reason">Retrieval reason <span class="required-mark">*</span></label>
+              <label for="retrieval-reason">Enquiry reason <span class="required-mark">*</span></label>
               <select id="retrieval-reason">
                 <option value="Product availability">Product availability</option>
                 <option value="Quote status">Quote status</option>

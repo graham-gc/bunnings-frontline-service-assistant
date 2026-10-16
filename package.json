@@ -7,7 +7,8 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "test:rules": "node scripts/test-rules.js",
-    "test:cases": "node scripts/test-cases.js"
+    "test:cases": "node scripts/test-cases.js",
+    "test:frontend": "node scripts/test-frontend.js"
   },
   "engines": {
     "node": ">=18"

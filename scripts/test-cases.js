@@ -17,6 +17,14 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function futureDate(days = 1) {
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date());
+  const [year, month, day] = today.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
 async function waitForHealth(timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -261,32 +269,15 @@ async function runTests() {
   }
 
   try {
-    const allowed = await request(`/api/cases/${caseA.caseId}`, {
+    const beforeRequest = await request(`/api/cases/${caseA.caseId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ specialist: { advice: 'Check stock transfer options.' } })
     });
-    assert(allowed.status === 200, 'Allowed PATCH failed');
-    assert(allowed.data.specialist.advice === 'Check stock transfer options.', 'Specialist advice was not saved');
-    assert(allowed.data.specialist.adviceAt !== null, 'Specialist advice timestamp was not set');
-    assert(Array.isArray(allowed.data.history) && allowed.data.history.length > 1, 'PATCH did not append history');
-    pass('Allowed PATCH merges specialist advice');
+    assert(beforeRequest.status === 409 && beforeRequest.data.error.code === 'INVALID_STATE', 'Advice was accepted before specialist request');
+    pass('Specialist advice requires an active specialist review');
   } catch (error) {
-    fail('Allowed PATCH merges specialist advice', error);
-  }
-
-  try {
-    const merged = await request(`/api/cases/${caseA.caseId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ specialist: { summary: 'Nested merge check.' } })
-    });
-    assert(merged.status === 200, 'Nested merge PATCH failed');
-    assert(merged.data.specialist.advice === 'Check stock transfer options.', 'Nested PATCH removed existing advice');
-    assert(merged.data.specialist.summary === 'Nested merge check.', 'Nested PATCH did not merge summary');
-    pass('PATCH merges nested specialist fields');
-  } catch (error) {
-    fail('PATCH merges nested specialist fields', error);
+    fail('Specialist advice state guard', error);
   }
 
   // 4. Specialist request.
@@ -299,9 +290,41 @@ async function runTests() {
     assert(typeof requested.data.specialist.summary === 'string' && requested.data.specialist.summary.includes(caseA.caseId), 'Specialist summary is invalid');
     assert(!requested.data.specialist.summary.includes('SAP_API_KEY'), 'Specialist summary leaked a credential');
     assert(requested.data.handoverCount === 1, 'Handover count was not incremented');
+    assert(requested.data.outcome === 'NON_FCR', 'Specialist handover did not record NON_FCR');
+    assert(requested.data.outcomeAt !== null, 'Specialist handover did not record outcome time');
+    assert(typeof requested.data.contactDurationSec === 'number', 'Specialist handover did not record contact duration');
     pass('Request specialist', `handoverCount=${requested.data.handoverCount}`);
+
+    const repeated = await request(`/api/cases/${caseA.caseId}/request-specialist`, { method: 'POST' });
+    assert(repeated.status === 409 && repeated.data.error.code === 'INVALID_STATE', 'Repeated specialist request was accepted');
+    const unchanged = await request(`/api/cases/${caseA.caseId}`);
+    assert(unchanged.data.handoverCount === 1, 'Repeated specialist request changed handover count');
+    pass('Repeated specialist request is rejected');
   } catch (error) {
     fail('Request specialist', error);
+  }
+
+  try {
+    const allowed = await request(`/api/cases/${caseA.caseId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ specialist: { advice: 'Check stock transfer options.' } })
+    });
+    assert(allowed.status === 200, 'Specialist advice PATCH failed');
+    assert(allowed.data.specialist.advice === 'Check stock transfer options.', 'Specialist advice was not saved');
+    assert(allowed.data.specialist.adviceAt !== null, 'Specialist advice timestamp was not set');
+    pass('Specialist advice saved during review');
+
+    const specialistFollowUp = await request(`/api/cases/${caseA.caseId}/follow-up`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: 'Specialist team', dueDate: futureDate(2), customerNotified: false })
+    });
+    assert(specialistFollowUp.status === 200 && specialistFollowUp.data.status === 'FOLLOW_UP', 'Specialist follow-up failed');
+    assert(specialistFollowUp.data.outcome === 'NON_FCR', 'Specialist follow-up changed NON_FCR outcome');
+    pass('Specialist advice can continue to follow-up');
+  } catch (error) {
+    fail('Specialist advice and follow-up', error);
   }
 
   // 5. Resolve, follow-up, close using a second case.
@@ -330,7 +353,7 @@ async function runTests() {
     const followUp = await request(`/api/cases/${caseB.caseId}/follow-up`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: 'Alex', dueDate: '2026-10-16', customerNotified: true })
+      body: JSON.stringify({ owner: 'Alex', dueDate: futureDate(2), customerNotified: true })
     });
     assert(followUp.status === 200, 'Follow-up creation failed');
     assert(followUp.data.status === 'FOLLOW_UP', 'Follow-up status was not set');
@@ -342,6 +365,18 @@ async function runTests() {
     pass('Create follow-up records notification without sending');
   } catch (error) {
     fail('Create follow-up records notification without sending', error);
+  }
+
+  try {
+    const pastDue = await request(`/api/cases/${caseB.caseId}/follow-up`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: 'Alex', dueDate: '2000-01-01', customerNotified: false })
+    });
+    assert(pastDue.status === 400 && pastDue.data.error.code === 'BAD_REQUEST', 'Past due date was accepted');
+    pass('Follow-up rejects a past due date');
+  } catch (error) {
+    fail('Follow-up past-date validation', error);
   }
 
   try {
@@ -376,7 +411,7 @@ async function runTests() {
         options: {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ owner: 'Alex', dueDate: '2026-10-17', customerNotified: false })
+          body: JSON.stringify({ owner: 'Alex', dueDate: futureDate(3), customerNotified: false })
         }
       },
       {
@@ -402,8 +437,11 @@ async function runTests() {
     fail('Close case and enforce immutability', error);
   }
 
+  let caseC;
   try {
-    const resolved = await request(`/api/cases/${caseA.caseId}/resolve`, { method: 'POST' });
+    caseC = await createCase('A');
+    assert(caseC.caseId === 'TC-0003', 'Third case ID is not TC-0003');
+    const resolved = await request(`/api/cases/${caseC.caseId}/resolve`, { method: 'POST' });
     assert(resolved.status === 200, 'Resolve case failed');
     assert(resolved.data.status === 'RESOLVED', 'Resolve did not set status');
     assert(resolved.data.outcome === 'FCR', 'Resolve did not set FCR outcome');
@@ -432,7 +470,7 @@ async function runTests() {
     const followUp = await request(`/api/cases/${item.caseId}/follow-up`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: 'Alex', dueDate: '2026-10-16', customerNotified: false })
+      body: JSON.stringify({ owner: 'Alex', dueDate: futureDate(2), customerNotified: false })
     });
     assert(followUp.status === 200 && followUp.data.status === 'FOLLOW_UP' && followUp.data.outcome === 'NON_FCR', `KPI scenario ${item.key} follow-up failed`);
   }

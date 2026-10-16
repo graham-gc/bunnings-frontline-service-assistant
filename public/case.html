@@ -206,8 +206,29 @@
         </dl>
         <div id="followup-notify-action" hidden>
           <button type="button" class="button button--secondary" id="btn-mark-notified">Mark customer as notified</button>
+          <p class="field-help">This records that the customer was notified; it does not send an email or text message.</p>
           <p id="followup-notify-status" class="field-help" aria-live="polite"></p>
         </div>
+        <form id="specialist-followup-form" hidden novalidate>
+          <h4>Create follow-up after specialist review</h4>
+          <div class="field">
+            <label for="case-followup-owner">Owner <span class="required-mark">*</span></label>
+            <input id="case-followup-owner" type="text" autocomplete="name" placeholder="e.g. J. Smith" />
+          </div>
+          <div class="field">
+            <label for="case-followup-due-date">Due date <span class="required-mark">*</span></label>
+            <input id="case-followup-due-date" type="date" />
+          </div>
+          <label class="checkbox-label">
+            <input type="checkbox" id="case-followup-customer-notified" />
+            <span>Customer notified</span>
+          </label>
+          <p class="field-help">This records that the customer was notified; it does not send an email or text message.</p>
+          <div class="form-actions">
+            <button type="submit" class="button button--primary" id="btn-specialist-followup">Create follow-up</button>
+            <p id="specialist-followup-status" class="field-help" aria-live="polite"></p>
+          </div>
+        </form>
       </section>
 
       <section id="history-section" class="result-card">
@@ -224,6 +245,7 @@
           <p id="close-status" class="field-help" aria-live="polite"></p>
         </div>
         <p id="already-closed-message" class="field-help" hidden>This case is closed.</p>
+        <p id="close-unavailable-message" class="field-help" hidden>Complete the current case action before closing this case.</p>
       </section>
     </article>
   </main>

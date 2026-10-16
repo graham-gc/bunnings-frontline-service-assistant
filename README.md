@@ -6,17 +6,17 @@ Option 1 implementation of the full A2 TO-BE frontline customer service model (W
 
 ## Implemented Functionality
 
-- **Operational KPI Dashboard** — enquiries today, FCR rate, open follow-ups, average contact duration, handover rate; case table with status chips, identifiers, and view links.
+- **Operational KPI Dashboard** — clearly labelled today/current/all-recorded KPI scopes; case table with status chips, identifiers, and view links.
 - **Standard Retail Workflow** — product search by name or exact material ID, quantity entry, live stock check at plant 1710 with cross-store fallback, R5a/R5b evaluation, Resolve now → FCR.
 - **Trade Workflow** — customer search by name or exact ID, quotation selection with expired/Rejected status, item-level stock per non-rejected quotation item, order conversion and delivery status, R2–R4/R6 evaluation, follow-up or specialist recommendation.
-- **Special Order Workflow** — product search with quantity, optional customer/quotation context, stock check with cross-store assessment, R5a/R5b evaluation.
+- **Special Order Workflow** — explicit product-and-quantity or quotation-only modes, optional customer validation, customer/quotation consistency checking, stock/order assessment and R1–R6 evaluation.
 - **R1–R6 Rule Evaluation** — customer blocked/deleted (R1), order conversion/delivery (R2), quotation expiry (R3), item rejection (R4), cross-store stock transfer (R5a), special order (R5b), payment terms mismatch (R6); actions TRANSFER, SPECIAL_ORDER, REQUOTE, CHECK_REJECTION.
 - **Recommendation Engine** — SPECIALIST flag → Request specialist; FOLLOW_UP flag → Create follow-up; else → Resolve now.
 - **Persistent Local Case Records** — JSON-backed storage (`data/cases.json`), auto-increment case IDs (TC-0001…), full audit history.
-- **Specialist Advice** — PATCH specialist advice on open cases; history refreshed immediately.
-- **Follow-up Management** — owner, due date, customer-notified flag with timestamp recording; notification action on open cases.
+- **Specialist Workflow** — a specialist handover records NON_FCR and contact duration, prevents duplicate handovers, accepts advice only during specialist review, and can continue to follow-up or close.
+- **Follow-up Management** — owner, future Auckland due date, customer-notified flag with timestamp recording; notification action on active follow-ups.
 - **History Timeline** — chronological action log; auto-refreshes after advice, notification, close.
-- **Data-integrity safeguards** — customer/quotation combinations are validated, and closed cases are immutable at the API layer.
+- **Data-integrity safeguards** — SAP check and case creation share one immutable input snapshot; customer/quotation combinations and exact materials are validated; repeated/invalid state transitions are rejected; closed cases are immutable.
 - **FCR / Follow-up / Handover KPIs** — FCR rate = FCR cases / cases with outcome; contact duration = outcomeAt − createdAt; handover rate = cases with handoverCount > 0 / all cases.
 - **Responsive Interface** — desktop two-column New Enquiry; tablet/mobile single-column; tables scroll internally; visible keyboard focus; text-plus-colour status chips.
 
@@ -115,7 +115,7 @@ Expected result:
 ### Test 3 — Special Order: no sellable stock
 
 1. Select **New Enquiry** → **Special Order**.
-2. Enter exact material ID `MZ-TG-A19` and select **Use exact material ID**.
+2. Keep **Check by product**, enter exact material ID `MZ-TG-A19`, and select **Use exact material ID**.
 3. Enter requested quantity `2` and retrieval reason **Product availability**.
 4. Leave the optional customer and quotation context blank, then select **Check in SAP**.
 
@@ -174,9 +174,28 @@ npm run test:rules
 
 # Case lifecycle & KPIs (create, list, get, PATCH, resolve, specialist, follow-up, close, KPI)
 npm run test:cases
+
+# Browser-logic regressions (immutable submission input, status labels, Auckland dates, visible quotation errors)
+npm run test:frontend
 ```
 
-Local acceptance testing was completed successfully on 16 October 2026 using the SAP sandbox data available at that time. Because the sandbox is externally maintained, returned records and values may change.
+### Additional regression scenarios
+
+These checks were completed on 16 October 2026 after the five manual scenarios above:
+
+| Check | Input/action | Expected and verified result |
+|---|---|---|
+| Special Order by quotation | `SPECIAL_ORDER`, quotation `20000003`, no product | Quotation loads and customer `USCU-CUS01` is derived and checked |
+| Customer/quotation consistency | Customer `USCU-CUS02` with quotation `20000002` | HTTP 400 `BAD_REQUEST`; no misleading case is created |
+| Invalid exact material | `ZZ-NOT-FOUND`, quantity 1 | HTTP 404 `NOT_FOUND`; it is not treated as zero stock |
+| Input snapshot integrity | Check P1/qty 1, then mutate the form-state object to P2/qty 99 | Saved case payload remains P1/qty 1 |
+| Duplicate specialist request | Request specialist twice | First request records one handover and NON_FCR; second returns HTTP 409 `INVALID_STATE` |
+| Specialist continuation | Request specialist → save advice → create follow-up | Advice is retained, status becomes `FOLLOW_UP`, outcome remains NON_FCR |
+| Follow-up due date | Submit `2000-01-01` | HTTP 400 `BAD_REQUEST`; only a future Auckland date is accepted |
+| Closed case protection | After close, try PATCH/resolve/specialist/follow-up/close again | Every write returns HTTP 409 `CASE_CLOSED`; history is unchanged |
+| Quotation load failure | Force the local quotation request to return an error | Visible staff-friendly error replaces the loading state |
+
+Local acceptance and regression testing completed successfully using the SAP sandbox data available on 16 October 2026. Because the sandbox is externally maintained, returned records and quantities may change.
 
 **Clean KPI Checkpoint (before specialist request)**:
 - 5 enquiries today
@@ -223,7 +242,8 @@ Cases are stored locally in `data/cases.json` (JSON array). This is suitable for
 │   └── app.js             # Front-end logic
 ├── scripts/
 │   ├── test-rules.js      # R1–R6 acceptance tests
-│   └── test-cases.js      # Case lifecycle & KPI tests
+│   ├── test-cases.js      # Case lifecycle & KPI tests
+│   └── test-frontend.js   # Browser-logic regression tests
 ├── server/
 │   ├── index.js           # Express app, static files, route mounting
 │   ├── sap.js             # SAP sandbox client, date conversion, error mapping

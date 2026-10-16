@@ -96,7 +96,7 @@ function statusLabel(value) {
     REQUEST_SPECIALIST: 'Request specialist',
     CREATE_FOLLOW_UP: 'Create follow-up',
     FCR: 'First contact resolved',
-    NON_FCR: 'Follow-up recorded',
+    NON_FCR: 'Not resolved at first contact',
     NONE: 'No outcome yet'
   };
   return labels[value] || String(value || '').replace(/_/g, ' ') || 'Unknown';
@@ -197,13 +197,15 @@ function initDashboard() {
 
 const NEW_ENQUIRY = {
   pathway: null,
+  specialOrderMode: 'PRODUCT',
   selectedProduct: null,
   selectedCustomer: null,
   selectedQuotation: null,
   lastCheck: null,
   pendingCaseSave: false,
   dirty: false,
-  isSubmitting: false
+  isSubmitting: false,
+  quotationRequestId: 0
 };
 
 function markDirty() {
@@ -214,6 +216,42 @@ function markDirty() {
   if (status) status.textContent = '';
   const button = document.getElementById('check-submit');
   if (button) button.textContent = 'Check in SAP';
+}
+
+function setCurrentStep(stepNumber) {
+  const steps = document.querySelectorAll('.step-list .step');
+  steps.forEach((step, index) => step.classList.toggle('is-current', index === stepNumber - 1));
+}
+
+function localIsoDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function addDaysToIsoDate(value, days) {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function tomorrowInAuckland() {
+  return addDaysToIsoDate(localIsoDate(), 1);
+}
+
+function setEnquiryBusy(isBusy) {
+  const form = document.getElementById('enquiry-form');
+  if (!form) return;
+  form.querySelectorAll('input, select, button').forEach((control) => {
+    if (control.id !== 'check-submit') control.disabled = isBusy;
+  });
+  document.querySelectorAll('.pathway-card').forEach((button) => {
+    button.disabled = isBusy;
+  });
 }
 
 function money(amount, currency) {
@@ -257,7 +295,9 @@ function updateSubmitState() {
   } else if (NEW_ENQUIRY.pathway === 'TRADE') {
     valid = Boolean(NEW_ENQUIRY.selectedCustomer) && Boolean(NEW_ENQUIRY.selectedQuotation);
   } else if (NEW_ENQUIRY.pathway === 'SPECIAL_ORDER') {
-    valid = Boolean(NEW_ENQUIRY.selectedProduct) && quantityIsValid();
+    valid = NEW_ENQUIRY.specialOrderMode === 'QUOTATION'
+      ? Boolean(document.getElementById('optional-quotation-id')?.value.trim())
+      : Boolean(NEW_ENQUIRY.selectedProduct) && quantityIsValid();
   }
 
   button.disabled = !valid || NEW_ENQUIRY.isSubmitting;
@@ -323,6 +363,7 @@ function renderSelectedCustomer() {
     </div>
   `;
   document.getElementById('remove-customer').addEventListener('click', () => {
+    NEW_ENQUIRY.quotationRequestId += 1;
     NEW_ENQUIRY.selectedCustomer = null;
     NEW_ENQUIRY.selectedQuotation = null;
     const quoteList = document.getElementById('quotation-list');
@@ -467,14 +508,16 @@ async function setSelectedCustomer(customer) {
 
 async function loadQuotations(customerId) {
   const loading = document.getElementById('quotation-loading');
-  const error = document.getElementById('quotation-error');
+  const errorElement = document.getElementById('quotation-error');
   const list = document.getElementById('quotation-list');
-  if (!loading || !error || !list) return;
+  if (!loading || !errorElement || !list) return;
   loading.hidden = false;
-  error.hidden = true;
+  errorElement.hidden = true;
   list.innerHTML = '';
+  const requestId = ++NEW_ENQUIRY.quotationRequestId;
   try {
     const data = await requestJson(`/api/quotations?customerId=${encodeURIComponent(customerId)}`);
+    if (requestId !== NEW_ENQUIRY.quotationRequestId || NEW_ENQUIRY.selectedCustomer?.id !== customerId) return;
     const quotations = Array.isArray(data.results) ? data.results : [];
     if (quotations.length === 0) {
       list.innerHTML = '<li class="search-empty">No quotations found for this customer.</li>';
@@ -489,7 +532,7 @@ async function loadQuotations(customerId) {
         <span class="search-result-title">${escapeHtml(quotation.quotationId)}</span>
         <span class="search-result-detail">
           ${escapeHtml(formatQuotationDate(quotation))} · valid to ${escapeHtml(quotation.validTo || 'unknown')} · ${escapeHtml(quotationStateLabel(quotation))}
-          · ${escapeHtml(money(quotation.totalNet, quotation.currency))} · ${escapeHtml(statusLabel(quotation.processStatus))}
+          · ${escapeHtml(money(quotation.totalNet, quotation.currency))} · ${escapeHtml(processStatusLabel(quotation.processStatus))}
         </span>
       `;
       button.addEventListener('click', () => {
@@ -501,7 +544,7 @@ async function loadQuotations(customerId) {
           totalNet: quotation.totalNet,
           currency: quotation.currency,
           processStatus: quotation.processStatus,
-          processStatusText: statusLabel(quotation.processStatus)
+          processStatusText: processStatusLabel(quotation.processStatus)
         };
         markDirty();
         renderSelectedQuotation();
@@ -510,11 +553,12 @@ async function loadQuotations(customerId) {
       card.appendChild(button);
       list.appendChild(card);
     }
-  } catch (error) {
-    error.textContent = error.message || 'Quotations could not be loaded. Please try again.';
-    error.hidden = false;
+  } catch (err) {
+    if (requestId !== NEW_ENQUIRY.quotationRequestId) return;
+    errorElement.textContent = err.message || 'Quotations could not be loaded. Please try again or select the customer again.';
+    errorElement.hidden = false;
   } finally {
-    loading.hidden = true;
+    if (requestId === NEW_ENQUIRY.quotationRequestId) loading.hidden = true;
   }
 }
 
@@ -540,18 +584,36 @@ async function lookupCustomer(customerId, statusElement) {
 }
 
 function clearPanels() {
-  const panels = ['product-panel', 'trade-panel', 'optional-context'];
+  const panels = ['product-panel', 'trade-panel', 'optional-context', 'special-order-mode-panel'];
   for (const id of panels) {
     const element = document.getElementById(id);
     if (element) element.hidden = true;
   }
 }
 
+function applySpecialOrderMode() {
+  if (NEW_ENQUIRY.pathway !== 'SPECIAL_ORDER') return;
+  const quotationMode = NEW_ENQUIRY.specialOrderMode === 'QUOTATION';
+  document.getElementById('product-panel').hidden = quotationMode;
+  document.getElementById('optional-context').hidden = false;
+  const help = document.getElementById('special-order-context-help');
+  if (help) {
+    help.textContent = quotationMode
+      ? 'Quotation ID is required. Customer ID is optional and will be checked against the quotation when provided.'
+      : 'Customer ID and quotation ID are optional for the product-and-quantity flow.';
+  }
+  const required = document.getElementById('optional-quotation-required');
+  if (required) required.hidden = !quotationMode;
+  updateSubmitState();
+}
+
 function setPathway(pathway) {
+  NEW_ENQUIRY.quotationRequestId += 1;
   NEW_ENQUIRY.pathway = pathway;
   NEW_ENQUIRY.selectedProduct = null;
   NEW_ENQUIRY.selectedCustomer = null;
   NEW_ENQUIRY.selectedQuotation = null;
+  NEW_ENQUIRY.specialOrderMode = 'PRODUCT';
   markDirty();
   renderSelectedProduct();
   renderSelectedCustomer();
@@ -617,14 +679,17 @@ function setPathway(pathway) {
   } else if (pathway === 'TRADE') {
     document.getElementById('trade-panel').hidden = false;
   } else if (pathway === 'SPECIAL_ORDER') {
-    document.getElementById('product-panel').hidden = false;
-    document.getElementById('optional-context').hidden = false;
+    document.getElementById('special-order-mode-panel').hidden = false;
+    const productMode = document.querySelector('input[name="special-order-mode"][value="PRODUCT"]');
+    if (productMode) productMode.checked = true;
+    applySpecialOrderMode();
   }
 
   const stepDetails = document.getElementById('pathway-selected-text');
   if (stepDetails) {
     stepDetails.textContent = `${labelFromPathway(pathway)} selected. Complete the details below.`;
   }
+  setCurrentStep(2);
   updateSubmitState();
 }
 
@@ -639,10 +704,11 @@ function pathwayLabel(pathway) {
 
 function buildFormPayload() {
   const pathway = NEW_ENQUIRY.pathway;
+  const quotationMode = pathway === 'SPECIAL_ORDER' && NEW_ENQUIRY.specialOrderMode === 'QUOTATION';
   const customerId = (NEW_ENQUIRY.selectedCustomer && NEW_ENQUIRY.selectedCustomer.id) || null;
   const quotationId = NEW_ENQUIRY.selectedQuotation ? NEW_ENQUIRY.selectedQuotation.id : (pathway === 'SPECIAL_ORDER' ? (document.getElementById('optional-quotation-id').value.trim() || null) : null);
   const optionalCustomerId = pathway === 'SPECIAL_ORDER' ? document.getElementById('optional-customer-id').value.trim() : '';
-  const productId = NEW_ENQUIRY.selectedProduct ? NEW_ENQUIRY.selectedProduct.id : null;
+  const productId = !quotationMode && NEW_ENQUIRY.selectedProduct ? NEW_ENQUIRY.selectedProduct.id : null;
   const quantityInput = document.getElementById('requested-qty');
   const requestedQty = quantityInput && quantityInput.value.trim() !== '' ? Number(quantityInput.value) : null;
 
@@ -656,31 +722,32 @@ function buildFormPayload() {
   };
 }
 
-function buildCasePayload(checkResult) {
-  const form = buildFormPayload();
+function buildCasePayload(checkResult, form, retrievalReason) {
   return {
     pathway: form.pathway,
     customerId: form.customerId,
     quotationId: form.quotationId,
     productId: form.productId,
     requestedQty: form.requestedQty,
-    retrievalReason: document.getElementById('retrieval-reason').value,
+    retrievalReason,
     sapSnapshot: checkResult
   };
 }
 
 function clearGlobalError() {
   const globalError = document.getElementById('global-error');
+  const globalErrorText = document.getElementById('global-error-text');
   if (globalError) {
     globalError.hidden = true;
-    globalError.textContent = '';
+    if (globalErrorText) globalErrorText.textContent = '';
   }
 }
 
 function showGlobalError(message) {
   const globalError = document.getElementById('global-error');
+  const globalErrorText = document.getElementById('global-error-text');
   if (!globalError) return;
-  globalError.textContent = message;
+  if (globalErrorText) globalErrorText.textContent = message;
   globalError.hidden = false;
 }
 
@@ -793,7 +860,22 @@ function initNewEnquiry() {
   const optionalCustomer = document.getElementById('optional-customer-id');
   const optionalQuotation = document.getElementById('optional-quotation-id');
   if (optionalCustomer) optionalCustomer.addEventListener('input', markDirty);
-  if (optionalQuotation) optionalQuotation.addEventListener('input', markDirty);
+  if (optionalQuotation) optionalQuotation.addEventListener('input', () => {
+    markDirty();
+    updateSubmitState();
+  });
+
+  document.querySelectorAll('input[name="special-order-mode"]').forEach((input) => {
+    input.addEventListener('change', () => {
+      NEW_ENQUIRY.specialOrderMode = input.value;
+      NEW_ENQUIRY.selectedProduct = null;
+      const quantity = document.getElementById('requested-qty');
+      if (quantity) quantity.value = '';
+      renderSelectedProduct();
+      markDirty();
+      applySpecialOrderMode();
+    });
+  });
 
   const actionButton = document.getElementById('check-submit');
   const statusArea = document.getElementById('check-status');
@@ -804,17 +886,24 @@ function initNewEnquiry() {
       if (actionButton.disabled) return;
 
       NEW_ENQUIRY.isSubmitting = true;
+      setEnquiryBusy(true);
+      setCurrentStep(3);
       updateSubmitState();
       const initialLabel = actionButton.textContent;
       actionButton.textContent = NEW_ENQUIRY.pendingCaseSave ? 'Saving case…' : 'Checking SAP…';
 
       try {
         let checkResult = null;
+        let submissionPayload = null;
+        let submissionReason = null;
         if (NEW_ENQUIRY.pendingCaseSave && NEW_ENQUIRY.lastCheck) {
           checkResult = NEW_ENQUIRY.lastCheck.result;
+          submissionPayload = NEW_ENQUIRY.lastCheck.payload;
+          submissionReason = NEW_ENQUIRY.lastCheck.retrievalReason;
         } else {
-          const payload = buildFormPayload();
-          const validationError = validateFormPayload(payload);
+          submissionPayload = Object.freeze({ ...buildFormPayload() });
+          submissionReason = document.getElementById('retrieval-reason').value;
+          const validationError = validateFormPayload(submissionPayload);
           if (validationError) {
             showGlobalError(validationError);
             return;
@@ -823,15 +912,15 @@ function initNewEnquiry() {
           checkResult = await requestJson('/api/check', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(submissionPayload)
           });
-          NEW_ENQUIRY.lastCheck = { payload, result: checkResult };
+          NEW_ENQUIRY.lastCheck = { payload: submissionPayload, retrievalReason: submissionReason, result: checkResult };
           NEW_ENQUIRY.dirty = false;
           NEW_ENQUIRY.pendingCaseSave = false;
           if (statusArea) statusArea.textContent = 'SAP check complete. Creating case…';
         }
 
-        const casePayload = buildCasePayload(checkResult);
+        const casePayload = buildCasePayload(checkResult, submissionPayload, submissionReason);
         const created = await requestJson('/api/cases', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -851,6 +940,8 @@ function initNewEnquiry() {
         }
       } finally {
         NEW_ENQUIRY.isSubmitting = false;
+        setEnquiryBusy(false);
+        if (!NEW_ENQUIRY.pendingCaseSave) setCurrentStep(2);
         updateSubmitState();
       }
     });
@@ -862,7 +953,7 @@ function initNewEnquiry() {
 
 function validateFormPayload(payload) {
   if (!payload || !payload.pathway) return 'Please choose a pathway.';
-  if (payload.pathway === 'STANDARD_RETAIL' || payload.pathway === 'SPECIAL_ORDER') {
+  if (payload.pathway === 'STANDARD_RETAIL' || (payload.pathway === 'SPECIAL_ORDER' && NEW_ENQUIRY.specialOrderMode === 'PRODUCT')) {
     if (!payload.productId) return 'Please select a product.';
     if (!Number.isFinite(payload.requestedQty) || payload.requestedQty <= 0) {
       return 'Please enter a quantity greater than zero.';
@@ -873,6 +964,9 @@ function validateFormPayload(payload) {
   }
   if (payload.pathway === 'TRADE' && !payload.quotationId) {
     return 'Please select a quotation.';
+  }
+  if (payload.pathway === 'SPECIAL_ORDER' && NEW_ENQUIRY.specialOrderMode === 'QUOTATION' && !payload.quotationId) {
+    return 'Please enter a quotation ID.';
   }
   return '';
 }
@@ -894,7 +988,7 @@ function formatDateForInput(isoString) {
   if (!isoString) return '';
   const date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toISOString().split('T')[0];
+  return localIsoDate(date);
 }
 
 function paymentTermsLabel(code) {
@@ -1169,15 +1263,26 @@ function renderFlags(flags) {
   infoGroup.hidden = !hasInfo;
 }
 
-function renderActionPanel(recommendation, flags) {
+function renderActionPanel(caseData, flags) {
+  const recommendation = caseData.recommendation;
   const resolvePanel = document.getElementById('action-resolve-now');
   const specialistPanel = document.getElementById('action-request-specialist');
   const followupPanel = document.getElementById('action-create-followup');
+  const viewCasePanel = document.getElementById('action-view-case');
+  const viewCaseLink = document.getElementById('action-view-case-link');
   const desc = document.getElementById('action-description');
 
   resolvePanel.hidden = true;
   specialistPanel.hidden = true;
   followupPanel.hidden = true;
+  viewCasePanel.hidden = true;
+
+  if (caseData.status !== 'OPEN') {
+    desc.textContent = `This case is already ${statusLabel(caseData.status).toLowerCase()}. Actions are managed from Case Detail.`;
+    viewCaseLink.href = `case.html?id=${encodeURIComponent(caseData.caseId)}`;
+    viewCasePanel.hidden = false;
+    return;
+  }
 
   if (recommendation === 'RESOLVE_NOW') {
     resolvePanel.hidden = false;
@@ -1202,9 +1307,9 @@ function renderActionPanel(recommendation, flags) {
     }
     const dueInput = document.getElementById('followup-due-date');
     if (dueInput && !dueInput.value) {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      dueInput.value = tomorrow.toISOString().split('T')[0];
+      const tomorrow = tomorrowInAuckland();
+      dueInput.min = tomorrow;
+      dueInput.value = tomorrow;
     }
   }
 }
@@ -1248,7 +1353,7 @@ function renderResult(caseData) {
     if (sap.stock) renderStockTable(sap.stock, sap.quotation);
     if (sap.orders) renderOrdersCard(sap.orders);
     if (sap.flags) renderFlags(sap.flags);
-    renderActionPanel(caseData.recommendation, sap.flags);
+    renderActionPanel(caseData, sap.flags);
   }
 }
 
@@ -1310,8 +1415,10 @@ async function handleCreateFollowup(caseId) {
   const ownerError = document.getElementById('followup-owner-error');
   const dueDateError = document.getElementById('followup-due-date-error');
   ownerError.hidden = !!owner;
-  dueDateError.hidden = !!dueDate;
-  if (!owner || !dueDate) return;
+  const dueDateValid = Boolean(dueDate) && dueDate >= tomorrowInAuckland();
+  dueDateError.textContent = dueDate ? 'Choose a future due date.' : 'Due date is required.';
+  dueDateError.hidden = dueDateValid;
+  if (!owner || !dueDateValid) return;
   RESULT_PAGE.isSubmitting = true;
   btn.disabled = true;
   showActionLoading('followup', 'Creating follow-up…');
@@ -1655,16 +1762,26 @@ function renderSpecialistSection(specialist, caseStatus) {
   }
 
   // Explicitly set advice form visibility based on case status
-  adviceForm.hidden = (caseStatus === 'CLOSED');
+  adviceForm.hidden = (caseStatus !== 'AWAITING_SPECIALIST');
 }
 
-function renderFollowupSection(followUp, caseStatus) {
+function renderFollowupSection(followUp, caseStatus, specialist) {
   const empty = document.getElementById('followup-empty');
   const details = document.getElementById('followup-details');
   const notifyAction = document.getElementById('followup-notify-action');
+  const specialistForm = document.getElementById('specialist-followup-form');
+  const canCreateAfterSpecialist = caseStatus === 'AWAITING_SPECIALIST' && Boolean(String(specialist && specialist.advice || '').trim());
+  specialistForm.hidden = !canCreateAfterSpecialist;
+
+  if (canCreateAfterSpecialist) {
+    const dueDate = document.getElementById('case-followup-due-date');
+    const tomorrow = tomorrowInAuckland();
+    dueDate.min = tomorrow;
+    if (!dueDate.value) dueDate.value = tomorrow;
+  }
 
   if (!followUp || !followUp.owner) {
-    empty.hidden = false;
+    empty.hidden = canCreateAfterSpecialist;
     details.hidden = true;
     notifyAction.hidden = true;
     return;
@@ -1710,13 +1827,19 @@ function renderHistory(history) {
 function renderCloseSection(caseData) {
   const closeAction = document.getElementById('close-action');
   const alreadyClosed = document.getElementById('already-closed-message');
+  const unavailable = document.getElementById('close-unavailable-message');
+  const specialistReady = caseData.status === 'AWAITING_SPECIALIST'
+    && Boolean(String(caseData.specialist && caseData.specialist.advice || '').trim());
+  const canClose = ['RESOLVED', 'FOLLOW_UP'].includes(caseData.status) || specialistReady;
 
   if (caseData.status === 'CLOSED') {
     closeAction.hidden = true;
     alreadyClosed.hidden = false;
+    unavailable.hidden = true;
   } else {
-    closeAction.hidden = false;
+    closeAction.hidden = !canClose;
     alreadyClosed.hidden = true;
+    unavailable.hidden = canClose;
   }
 }
 
@@ -1764,7 +1887,7 @@ function renderCaseDetail(caseData) {
   renderCaseFlags(flags);
   if (caseData.sapSnapshot) renderSapSnapshot(caseData.sapSnapshot);
   renderSpecialistSection(caseData.specialist, caseData.status);
-  renderFollowupSection(caseData.followUp, caseData.status);
+  renderFollowupSection(caseData.followUp, caseData.status, caseData.specialist);
   renderHistory(caseData.history);
   renderCloseSection(caseData);
 
@@ -1812,6 +1935,8 @@ async function handleSaveAdvice(caseId) {
     status.style.color = 'var(--success-text)';
     // Refresh specialist section and history
     renderSpecialistSection(updated.specialist, updated.status);
+    renderFollowupSection(updated.followUp, updated.status, updated.specialist);
+    renderCloseSection(updated);
     renderHistory(updated.history);
   } catch (error) {
     status.textContent = error.message || 'Failed to save advice. Please try again.';
@@ -1842,10 +1967,46 @@ async function handleMarkNotified(caseId) {
     status.textContent = 'Customer marked as notified.';
     status.style.color = 'var(--success-text)';
     // Refresh follow-up section and history
-    renderFollowupSection(updated.followUp, updated.status);
+    renderFollowupSection(updated.followUp, updated.status, updated.specialist);
     renderHistory(updated.history);
   } catch (error) {
     status.textContent = error.message || 'Failed to record notification. Please try again.';
+    status.style.color = 'var(--danger-text)';
+  } finally {
+    CASE_DETAIL.isSubmitting = false;
+    btn.disabled = false;
+  }
+}
+
+async function handleSpecialistFollowup(caseId) {
+  const form = document.getElementById('specialist-followup-form');
+  const btn = document.getElementById('btn-specialist-followup');
+  const status = document.getElementById('specialist-followup-status');
+  if (!form || !btn || CASE_DETAIL.isSubmitting) return;
+
+  const owner = document.getElementById('case-followup-owner').value.trim();
+  const dueDate = document.getElementById('case-followup-due-date').value;
+  const customerNotified = document.getElementById('case-followup-customer-notified').checked;
+  if (!owner || !dueDate || dueDate < tomorrowInAuckland()) {
+    status.textContent = !owner ? 'Enter a follow-up owner.' : 'Choose a future due date.';
+    status.style.color = 'var(--danger-text)';
+    return;
+  }
+
+  CASE_DETAIL.isSubmitting = true;
+  btn.disabled = true;
+  status.textContent = 'Creating follow-up…';
+  status.style.color = 'var(--muted)';
+  try {
+    const updated = await requestJson(`/api/cases/${encodeURIComponent(caseId)}/follow-up`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner, dueDate, customerNotified })
+    });
+    CASE_DETAIL.caseData = updated;
+    renderCaseDetail(updated);
+  } catch (error) {
+    status.textContent = error.message || 'Failed to create follow-up. Please try again.';
     status.style.color = 'var(--danger-text)';
   } finally {
     CASE_DETAIL.isSubmitting = false;
@@ -1907,6 +2068,14 @@ function initCaseDetailPage() {
   const markNotifiedBtn = document.getElementById('btn-mark-notified');
   if (markNotifiedBtn) {
     markNotifiedBtn.addEventListener('click', () => handleMarkNotified(caseId));
+  }
+
+  const specialistFollowupForm = document.getElementById('specialist-followup-form');
+  if (specialistFollowupForm) {
+    specialistFollowupForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      handleSpecialistFollowup(caseId);
+    });
   }
 
   const closeCaseBtn = document.getElementById('btn-close-case');

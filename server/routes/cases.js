@@ -4,7 +4,7 @@ const store = require('../store');
 
 const VALID_PATHWAYS = new Set(['STANDARD_RETAIL', 'TRADE', 'SPECIAL_ORDER']);
 const VALID_STATUSES = new Set(['OPEN', 'AWAITING_SPECIALIST', 'FOLLOW_UP', 'RESOLVED', 'CLOSED']);
-const PATCHABLE_FIELDS = new Set(['specialist', 'followUp', 'status']);
+const PATCHABLE_FIELDS = new Set(['specialist', 'followUp']);
 
 function nowIso() {
   return new Date().toISOString();
@@ -31,7 +31,23 @@ function mergeObjects(existing, patch) {
 }
 
 function localDate(value) {
-  return new Date(value).toLocaleDateString('en-CA');
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date(value));
+}
+
+function addDaysToIsoDate(value, days) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days));
+  return date.toISOString().slice(0, 10);
+}
+
+function tomorrowInAuckland() {
+  return addDaysToIsoDate(localDate(new Date()), 1);
 }
 
 function badRequest(res, message) {
@@ -50,12 +66,24 @@ function requireEditable(item) {
   }
 }
 
+function requireStatus(item, allowedStatuses, message) {
+  requireEditable(item);
+  if (!allowedStatuses.includes(item.status)) {
+    const error = new Error(message || 'This action is not available for the current case status.');
+    error.code = 'INVALID_STATE';
+    throw error;
+  }
+}
+
 function mutationError(res, error, fallbackMessage) {
   if (error && (error.code === 'NOT_FOUND' || error.message === 'NOT_FOUND')) {
     return notFound(res);
   }
   if (error && (error.code === 'CASE_CLOSED' || error.message === 'CASE_CLOSED')) {
     return sendError(res, 409, 'CASE_CLOSED', 'This case is closed and can no longer be changed.', null);
+  }
+  if (error && error.code === 'INVALID_STATE') {
+    return sendError(res, 409, 'INVALID_STATE', error.message, null);
   }
   return sendError(res, 500, 'INTERNAL_ERROR', fallbackMessage, null);
 }
@@ -148,19 +176,12 @@ router.patch('/cases/:id', async (req, res) => {
 
   const body = req.body;
   if (!isPlainObject(body) || Object.keys(body).length === 0) {
-    return badRequest(res, 'Please provide specialist, follow-up or status details to update.');
+    return badRequest(res, 'Please provide specialist or follow-up details to update.');
   }
 
   const unknownFields = Object.keys(body).filter((field) => !PATCHABLE_FIELDS.has(field));
   if (unknownFields.length > 0) {
-    return badRequest(res, 'Only specialist, follow-up and status fields can be updated.');
-  }
-
-  if (body.status !== undefined) {
-    const status = String(body.status || '').trim().toUpperCase();
-    if (!VALID_STATUSES.has(status)) {
-      return badRequest(res, 'Please choose a valid case status.');
-    }
+    return badRequest(res, 'Only specialist and follow-up details can be updated. Use the case action buttons to change status.');
   }
 
   if (body.specialist !== undefined && !isPlainObject(body.specialist)) {
@@ -168,6 +189,18 @@ router.patch('/cases/:id', async (req, res) => {
   }
   if (body.followUp !== undefined && !isPlainObject(body.followUp)) {
     return badRequest(res, 'Follow-up details must be provided as an object.');
+  }
+  if (body.specialist) {
+    const unknownSpecialistFields = Object.keys(body.specialist).filter((field) => field !== 'advice');
+    if (unknownSpecialistFields.length > 0 || !String(body.specialist.advice || '').trim()) {
+      return badRequest(res, 'Please provide non-blank specialist advice only.');
+    }
+  }
+  if (body.followUp) {
+    const unknownFollowUpFields = Object.keys(body.followUp).filter((field) => field !== 'customerNotified');
+    if (unknownFollowUpFields.length > 0 || body.followUp.customerNotified !== true) {
+      return badRequest(res, 'This update can only mark the customer as notified.');
+    }
   }
 
   try {
@@ -180,6 +213,7 @@ router.patch('/cases/:id', async (req, res) => {
       const historyEntries = [];
 
       if (body.specialist) {
+        requireStatus(item, ['AWAITING_SPECIALIST'], 'Specialist advice can only be updated while specialist review is in progress.');
         const merged = mergeObjects(item.specialist, body.specialist);
         if (body.specialist.advice !== undefined && String(body.specialist.advice || '').trim() !== '' && body.specialist.adviceAt === undefined) {
           merged.adviceAt = now;
@@ -189,20 +223,13 @@ router.patch('/cases/:id', async (req, res) => {
       }
 
       if (body.followUp) {
+        requireStatus(item, ['FOLLOW_UP'], 'Follow-up details can only be updated after a follow-up has been created.');
         const merged = mergeObjects(item.followUp, body.followUp);
         if (body.followUp.customerNotified === true && body.followUp.notifiedAt === undefined) {
           merged.notifiedAt = now;
         }
         item.followUp = merged;
         historyEntries.push('Follow-up details updated');
-      }
-
-      if (body.status !== undefined) {
-        const status = String(body.status).trim().toUpperCase();
-        if (item.status !== status) {
-          item.status = status;
-          historyEntries.push(`Status changed to ${status}`);
-        }
       }
 
       item.history = Array.isArray(item.history) ? item.history : [];
@@ -231,7 +258,7 @@ router.post('/cases/:id/resolve', async (req, res) => {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
-      requireEditable(item);
+      requireStatus(item, ['OPEN'], 'Only an open case can be resolved at first contact.');
 
       const now = nowIso();
       item.outcome = 'FCR';
@@ -258,7 +285,7 @@ router.post('/cases/:id/request-specialist', async (req, res) => {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
-      requireEditable(item);
+      requireStatus(item, ['OPEN'], 'A specialist can only be requested once for an open case.');
 
       const now = nowIso();
       const issues = Array.isArray(item.flags)
@@ -272,6 +299,9 @@ router.post('/cases/:id/request-specialist', async (req, res) => {
       if (issues.length > 0) parts.push(`Issues: ${issues.join(' ')}`);
 
       item.status = 'AWAITING_SPECIALIST';
+      item.outcome = 'NON_FCR';
+      item.outcomeAt = now;
+      item.contactDurationSec = elapsedWholeSeconds(item.createdAt, now);
       item.specialist = mergeObjects(item.specialist, {
         requested: true,
         requestedAt: now,
@@ -305,18 +335,28 @@ router.post('/cases/:id/follow-up', async (req, res) => {
   if (!dueDateRaw || Number.isNaN(Date.parse(dueDateRaw))) {
     return badRequest(res, 'Please enter a valid follow-up due date.');
   }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDateRaw) || dueDateRaw < tomorrowInAuckland()) {
+    return badRequest(res, 'Please choose a future follow-up due date.');
+  }
 
   try {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
-      requireEditable(item);
+      requireStatus(item, ['OPEN', 'AWAITING_SPECIALIST'], 'A follow-up can only be created for an open case or a case under specialist review.');
+      if (item.status === 'AWAITING_SPECIALIST' && !String(item.specialist && item.specialist.advice || '').trim()) {
+        const error = new Error('Record specialist advice before creating the follow-up.');
+        error.code = 'INVALID_STATE';
+        throw error;
+      }
 
       const now = nowIso();
       item.status = 'FOLLOW_UP';
       item.outcome = 'NON_FCR';
-      item.outcomeAt = now;
-      item.contactDurationSec = elapsedWholeSeconds(item.createdAt, now);
+      if (!item.outcomeAt) item.outcomeAt = now;
+      if (item.contactDurationSec === null || item.contactDurationSec === undefined) {
+        item.contactDurationSec = elapsedWholeSeconds(item.createdAt, now);
+      }
       item.followUp = mergeObjects(item.followUp, {
         owner,
         dueDate: dueDateRaw,
@@ -347,7 +387,12 @@ router.post('/cases/:id/close', async (req, res) => {
     const updated = await store.mutate((cases) => {
       const item = cases.find((entry) => entry.caseId === id);
       if (!item) throw new Error('NOT_FOUND');
-      requireEditable(item);
+      requireStatus(item, ['RESOLVED', 'FOLLOW_UP', 'AWAITING_SPECIALIST'], 'Complete the current case action before closing the case.');
+      if (item.status === 'AWAITING_SPECIALIST' && !String(item.specialist && item.specialist.advice || '').trim()) {
+        const error = new Error('Record specialist advice before closing the case.');
+        error.code = 'INVALID_STATE';
+        throw error;
+      }
 
       const now = nowIso();
       item.status = 'CLOSED';
@@ -366,7 +411,7 @@ router.post('/cases/:id/close', async (req, res) => {
 router.get('/kpi', async (req, res) => {
   try {
     const cases = await store.readCases();
-    const today = localDate(new Date().toISOString());
+    const today = localDate(new Date());
 
     const enquiriesToday = cases.filter((item) => item.createdAt && localDate(item.createdAt) === today).length;
 

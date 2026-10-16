@@ -616,6 +616,44 @@ body {
   color: #ffffff;
 }
 
+.mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  cursor: pointer;
+}
+
+.mode-option:has(input:checked) {
+  border-color: var(--header);
+  box-shadow: 0 0 0 1px var(--header);
+  background: #f0f7f7;
+}
+
+.mode-option input {
+  margin-top: 0.25rem;
+  accent-color: var(--header);
+}
+
+.mode-option span,
+.mode-option small {
+  display: block;
+}
+
+.mode-option small {
+  margin-top: 0.25rem;
+  color: var(--muted);
+}
+
 .workflow-layout {
   display: grid;
   gap: 1.25rem;
@@ -954,6 +992,10 @@ select:focus {
   }
 
   .step-list {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-options {
     grid-template-columns: 1fr;
   }
 

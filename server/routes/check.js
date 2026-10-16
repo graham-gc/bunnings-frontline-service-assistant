@@ -18,6 +18,15 @@ function checkedAt() {
   return new Date().toISOString();
 }
 
+function businessDate() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+}
+
 function sendSapError(res, err, notFoundMessage) {
   const message = (err && err.notFoundMessage) || notFoundMessage;
   if (err && err.code === 'NOT_FOUND') {
@@ -94,19 +103,36 @@ async function fetchCustomer(customerId) {
   }
 }
 
-async function productDescription(productId) {
+async function fetchProductDetails(productId) {
   try {
+    const products = normalizeRows(await sapGet(PRODUCT_SERVICE, 'A_Product', {
+      $filter: `Product eq '${escapeOData(productId)}'`,
+      $top: '1',
+      $select: 'Product'
+    }));
+    if (products.length === 0) {
+      const notFound = new Error('NOT_FOUND');
+      notFound.code = 'NOT_FOUND';
+      notFound.notFoundMessage = 'Material ID not found. Please check the number or search by product name.';
+      throw notFound;
+    }
+    const product = products[0];
     const rows = await sapGet(PRODUCT_SERVICE, 'A_ProductDescription', {
       $filter: `Language eq 'EN' and Product eq '${escapeOData(productId)}'`,
       $top: '1',
       $select: 'Product,ProductDescription'
     });
     const row = normalizeRows(rows)[0];
-    if (row && row.ProductDescription) return row.ProductDescription;
+    return {
+      productId: product && product.Product ? product.Product : productId,
+      description: row && row.ProductDescription ? row.ProductDescription : productId
+    };
   } catch (err) {
-    // Keep the product identifier if SAP does not return a description.
+    if (err && err.code === 'NOT_FOUND') {
+      err.notFoundMessage = 'Material ID not found. Please check the number or search by product name.';
+    }
+    throw err;
   }
-  return productId;
 }
 
 async function fetchStockEntry(material, description, plant, required) {
@@ -227,7 +253,7 @@ function mapQuotation(raw) {
     date: toIsoDate(raw.SalesQuotationDate),
     validFrom,
     validTo,
-    isExpired: validTo ? validTo < new Date().toISOString().slice(0, 10) : false,
+    isExpired: validTo ? validTo < businessDate() : false,
     totalNet: parseNumber(raw.TotalNetAmount),
     currency: raw.TransactionCurrency,
     paymentTerms: raw.CustomerPaymentTerms,
@@ -323,8 +349,8 @@ router.post('/', async (req, res) => {
         });
       }
       const qty = Number(requestedQty);
-      const description = await productDescription(productId);
-      const stock = [await fetchStockEntry(productId, description, plant, qty)];
+      const product = await fetchProductDetails(productId);
+      const stock = [await fetchStockEntry(product.productId, product.description, plant, qty)];
       const result = evaluate({ pathway, customer: null, quotation: null, stock, orders: null });
       return res.json({
         pathway,
@@ -400,8 +426,8 @@ router.post('/', async (req, res) => {
     }
 
     if (hasProduct) {
-      const description = await productDescription(productId);
-      stock.push(await fetchStockEntry(productId, description, plant, Number(requestedQty)));
+      const product = await fetchProductDetails(productId);
+      stock.push(await fetchStockEntry(product.productId, product.description, plant, Number(requestedQty)));
     }
 
     if (hasQuotation) {
@@ -419,11 +445,7 @@ router.post('/', async (req, res) => {
 
       orders = await getOrdersByQuotation(quotationId);
       if (!customer && quotation.customerId) {
-        try {
-          customer = await fetchCustomer(quotation.customerId);
-        } catch (err) {
-          customer = null;
-        }
+        customer = await fetchCustomer(quotation.customerId);
       }
       for (const item of quotation.items.filter((entry) => !entry.isRejected)) {
         const itemQty = hasPositiveNumber(item.qty) ? Number(item.qty) : 0;

@@ -72,6 +72,33 @@ async function run() {
     report('C1 Special Order', passed, passed ? '0 PC, R5b SPECIAL_ORDER, CREATE_FOLLOW_UP' : JSON.stringify(data));
   }
 
+  // Special Order can be checked by quotation only and derives the SAP customer.
+  {
+    const { status, data } = await apiCheck({
+      pathway: 'SPECIAL_ORDER',
+      quotationId: '20000003',
+      plant: '1710'
+    });
+    const passed = status === 200
+      && data && data.quotation && data.quotation.quotationId === '20000003'
+      && data.customer && data.customer.customerId === 'USCU-CUS01';
+    report('Special Order quotation-only flow', passed, passed ? 'quotation and customer verified' : JSON.stringify(data));
+  }
+
+  // A mistyped material must not be treated as confirmed zero stock.
+  {
+    const { status, data } = await apiCheck({
+      pathway: 'STANDARD_RETAIL',
+      productId: 'ZZ-NOT-FOUND',
+      requestedQty: 1,
+      plant: '1710'
+    });
+    const passed = status === 404
+      && data && data.error && data.error.code === 'NOT_FOUND'
+      && /material id not found/i.test(String(data.error.message));
+    report('Invalid material is not treated as zero stock', passed, passed ? 'HTTP 404 NOT_FOUND' : JSON.stringify(data));
+  }
+
   // Customer and quotation must describe the same SAP account.
   {
     const { status, data } = await apiCheck({
